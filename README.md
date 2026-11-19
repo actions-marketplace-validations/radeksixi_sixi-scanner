@@ -10,8 +10,8 @@ evidence.
 $ sixi-scanner scan --url https://your-agent.example/v1/chat/completions
 ```
 
-27 techniques · Go standard library only, zero dependencies · reports as JSON,
-SARIF 2.1.0 or Markdown · Apache 2.0.
+45 techniques · Go standard library only, zero dependencies · reports as JSON,
+SARIF 2.1.0, Markdown or HTML · Apache 2.0.
 
 **Radek (Sixi)** · [github.com/radeksixi/sixi-scanner](https://github.com/radeksixi/sixi-scanner)
 
@@ -21,12 +21,12 @@ SARIF 2.1.0 or Markdown · Apache 2.0.
 
 Read this before you use the output for anything.
 
-**A clean result is not an assurance.** It means the 27 probes below did not
+**A clean result is not an assurance.** It means the 45 probes below did not
 produce a finding against the endpoint you named. It says nothing about
 techniques this tool does not implement, and nothing about attacks that need
-judgement no substring match can make. The report says so at the bottom of
-every Markdown run, because a reader forwarding the document should not have to
-come back to the README to find out.
+judgement no substring match or structural oracle can make. The report says so
+at the bottom of every Markdown and HTML run, because a reader forwarding the
+document should not have to come back to the README to find out.
 
 **It does not certify, attest or grade compliance.** No output of this tool says
 the words *compliant*, *certified* or *guaranteed*, and a test enforces that.
@@ -158,25 +158,50 @@ $ sixi-scanner scan --url https://your-agent.example/v1/chat/completions \
     --only probe.llm02.system-prompt-leak
 ```
 
+Passively inspect an MCP server or A2A Agent Card for tool poisoning and trust-posture issues (sends zero adversarial prompts):
+
+```console
+$ sixi-scanner surface --url https://your-agent.example
+```
+
+Compare two JSON scans honestly (distinguishing fixed from not retested):
+
+```console
+$ sixi-scanner diff baseline.json current.json
+```
+
+Enforce a deterministic tool-call policy on observed tool traces (no LLM judge required):
+
+```console
+$ sixi-scanner scan --target json --url https://internal.example/api/ask \
+    --body '{"question":{{json}},"session":{{session_json}}}' \
+    --reply-path reply --trace-path tool_calls \
+    --context agent.json --reproduce 2 --redact --out report.html
+```
+
 ## Connectors
 
 | `--target` | Talks to | Needs |
 |---|---|---|
 | `openai` | OpenAI-compatible `/chat/completions` | `--url`, optionally `--model` |
-| `json` | Anything, with a described request and reply shape | `--url`, `--body`, `--reply-path` |
-| `chat` | An endpoint that keeps a conversation, one probe per turn | `--url` |
+| `json` | Anything, with a described request and reply shape | `--url`, `--body`, `--reply-path`, optionally `--trace-path` |
+| `chat` | An endpoint that keeps a conversation, one probe per turn | `--url`, optionally `--trace-path` |
+| `mcp` | Model Context Protocol (MCP) JSON-RPC 2.0 server (`tools/list` + `tools/call`) | `--url`, optionally `--tool` |
+| `a2a` | Agent-to-Agent (A2A) JSON-RPC endpoint (v0.3 `message/send` with v0.2 `tasks/send` fallback, session-capable) | `--url` |
 | `webform` | An HTML form | `--url`, `--field` |
 | `echo` | Nothing — an in-process target for demos and CI | nothing |
 
 The `json` connector is the one that makes this usable against a system nobody
 else has seen. `--body` takes a template with `{{json}}` (the prompt as a whole
 JSON string, quotes included, which is what you want) or `{{prompt}}` (the
-prompt escaped for a string you have already quoted, as in `"q":"{{prompt}}"`);
-`--reply-path` is a dotted path into the response, with numeric segments for
-arrays:
+prompt escaped for a string you have already quoted, as in `"q":"{{prompt}}"`).
+Including `{{session}}` or `{{session_json}}` in `--body` automatically enables
+multi-turn `Sequence` probes on the `json` connector. `--reply-path` (and
+optional `--trace-path` for tool-call traces) take dotted paths into the
+response, with numeric segments for arrays:
 
 ```console
---body '{"q":{{json}}}' --reply-path data.0.answer.text
+--body '{"q":{{json}},"session":{{session_json}}}' --reply-path data.0.answer.text --trace-path data.0.tool_calls
 ```
 
 ### Multi-turn probes
@@ -209,11 +234,16 @@ could run nothing exits 2 rather than passing.
 |---|---|
 | `text` | Reading at a terminal. Findings go to stderr, the summary to stdout, so `> summary.txt` stays clean. |
 | `json` | Machines. The full schema, including every finding's transcript. |
-| `sarif` | Code scanning. SARIF 2.1.0; GitHub code scanning, `reviewdog` and friends consume it. |
+| `sarif` | Code scanning. SARIF 2.1.0 with `security-severity`, Markdown help, `automationDetails`, and redacted snippets. |
 | `markdown` | Sending to a person who has to decide whether to act. |
+| `html` | Self-contained, auto-escaped single-file HTML report (no external assets, no compliance grading). |
 
 Write a report to a file with `--out`; the format is taken from the extension
-unless `--format` says otherwise.
+(`.json`, `.sarif`, `.md`, `.html`) unless `--format` says otherwise. Pass
+`--redact` to scrub secrets, tokens, emails, IPv4 addresses and long account
+numbers from finding evidence while keeping fingerprints stable, and
+`--reproduce N` to re-run only breaking payloads `N` extra times and record
+`k/n` reproducibility.
 
 ## In CI
 
@@ -251,23 +281,33 @@ or the SARIF uploader of your choice.
 
 `sixi-scanner list` prints the catalogue; `docs/techniques.md` explains the gaps.
 
-Covered, as publicly documented baseline probes:
+Covered, as publicly documented baseline probes (45 active techniques plus passive MCP/A2A surface inspection):
 
 - **Prompt injection** — instruction override, forged conversation turns,
   authority and persona framing, inter-agent routing framing, encoded
-  instructions, non-English instructions, indirect injection via quoted content,
-  and delayed multi-turn instructions
+  instructions, non-English and low-resource multilingual instructions, indirect
+  and latent document injection, Unicode tag-plane & BiDi/backspace smuggling,
+  MathPrompt, many-shot conditioning, Bad Likert Judge, adversarial poetry,
+  JSON schema constraint bypass, delayed multi-turn instructions, and sleeper
+  memory poisoning
 - **Sensitive disclosure** — system prompt leakage (direct and as a translation
-  task), credential and configuration elicitation, parameter induction into tool
-  arguments, conversation-context leakage, personal data elicitation, canary
-  disclosure
+  task), credential and configuration elicitation (with provider-token patterns
+  and placeholder filtering), parameter induction into tool arguments,
+  conversation-context leakage, personal data elicitation (with role-mailbox
+  filtering), canary disclosure
 - **Excessive agency** — tool enumeration, assent to irreversible actions,
   injected instructions inside tool arguments, scope expansion, per-request cap
-  splitting across a session, and outbound payload relay
+  splitting across a session, outbound payload relay, BOLA, BFLA, SSRF, and
+  deterministic wire policy enforcement via `--context` `policy`
 - **Misinformation and availability** — unqualified compliance claims, false
-  action claims adjudicated against the tool trace, unbounded output, verbatim
-  memorisation probes
-- **Output handling** — data exfiltration through rendered markup
+  action claims adjudicated against the tool trace, narration-only honesty caps,
+  declined-then-produced detection, unbounded output, verbatim memorisation
+  probes
+- **Output handling** — structural Markdown/EchoLeak exfiltration, SSTI echo
+  pass-through, raw ANSI/OSC 8 escape injection, Base64 active HTML/XSS
+  reflection, CSV formula injection, and email header injection
+- **Passive surface inspection (`sixi-scanner surface`)** — MCP `tools/list`
+  poisoning & cross-tool shadowing, A2A Agent Card poisoning & trust posture
 
 Not covered, and worth being explicit about:
 

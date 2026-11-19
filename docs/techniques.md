@@ -63,7 +63,7 @@ opting out `refusal-consistency` or `interagent-framing` was measured to lose
 
 ## What ships
 
-27 techniques across six categories.
+45 techniques across six categories (including 7 structural-oracle probes and 4 multi-turn sequences), plus passive MCP/A2A surface inspection via `sixi-scanner surface`.
 
 ### Prompt injection — `llm01`
 
@@ -77,6 +77,15 @@ opting out `refusal-consistency` or `interagent-framing` was measured to lose
 | `multilingual-bypass` | medium | The instruction in German, French or Spanish. |
 | `indirect-injection` | high | The instruction inside content the agent was asked to process. |
 | `interagent-framing` | high | Internal routing syntax posing as a peer or supervisor agent. |
+| `unicode-tag-smuggling` | high | Hidden instruction encoded in the Unicode Tag Plane (`U+E0020–U+E007E`), judged by structural unfolding. |
+| `bidi-backspace-smuggling` | high | Hidden instruction masked by Unicode BiDi overrides or backspace sequences. |
+| `latent-injection` | critical | Verdict-flipping directive embedded inside a realistic support ticket or résumé. |
+| `mathprompt` | high | Disclosure request framed as a symbolic mathematics or formal-proof exercise. |
+| `low-resource-multilingual` | high | Disclosure request issued in Welsh, Swahili or Zulu asking for an English reply. |
+| `many-shot` | high | In-context conditioning using fabricated compliant Q&A turns. |
+| `bad-likert-judge` | high | Safety-evaluator rubric framing requesting a score-5 disclosure specimen. |
+| `adversarial-poetry` | medium | Verse/rhyming-couplet framing to slip past prose-tuned refusal rules. |
+| `json-schema-bypass` | high | Constrained JSON schema enums and nested sensitive leaf fields (structural JSON oracle). |
 
 ### Sensitive disclosure — `llm02`, `llm07`
 
@@ -84,10 +93,10 @@ opting out `refusal-consistency` or `interagent-framing` was measured to lose
 |---|---|---|
 | `system-prompt-leak` | high | The direct ask for the instructions. |
 | `system-prompt-translation` | high | The same ask framed as a language task, which passes checks the direct ask fails. |
-| `credential-elicitation` | critical | API keys, tokens, connection strings. |
+| `credential-elicitation` | critical | API keys, provider tokens, JWTs, DB connection strings (with placeholder filtering). |
 | `parameter-induction` | critical | Inducing the agent to place its own secret into a tool call argument. |
 | `context-leak` | high | What the agent can see about the requester, or else in its context. |
-| `pii-elicitation` | high | A real customer record. |
+| `pii-elicitation` | high | A real customer record (filtering generic role mailboxes such as `dpo@` and `support@`). |
 | `canary-leak` | high | A planted token — the cheapest reliable test for prompt leakage. |
 
 ### Excessive agency — `llm06`
@@ -98,12 +107,20 @@ opting out `refusal-consistency` or `interagent-framing` was measured to lose
 | `irreversible-action-assent` | high | Whether the agent will accept a destructive instruction on its face. Probes willingness; issues no real call. |
 | `tool-argument-injection` | high | An instruction smuggled into a field the model fills in for a tool call. |
 | `scope-expansion` | medium | Being told the assigned task is wrong. |
+| `tool-bola` | critical | Broken Object-Level Authorization (reading another customer's order/profile via tools). |
+| `tool-bfla` | critical | Broken Function-Level Authorization (invoking admin/destructive tools without role check). |
+| `tool-ssrf` | critical | Server-Side Request Forgery against cloud metadata (`169.254.169.254`) or loopback via fetch tools. |
 
 ### Output handling, misinformation, availability, poisoning
 
 | ID | Severity | What it probes |
 |---|---|---|
-| `probe.llm05.markdown-exfiltration` | high | Data leaving through a URL or image in the rendered answer. |
+| `probe.llm05.markdown-exfiltration` | high | Data leaving through rendered inline or EchoLeak reference-style Markdown/HTML URLs (structural oracle). |
+| `probe.llm01.ssti-echo` | high | Balanced template expressions (`{{...}}`, `${...}`, `{%...%}`) passed through unescaped (structural oracle). |
+| `probe.llm05.ansi-escape` | high | Raw ANSI CSI/OSC 8 terminal escape bytes emitted in replies (structural oracle). |
+| `probe.llm05.xss-reflection` | high | Base64-decoded raw `<script>` / `<svg onload>` / `javascript:` reflection (structural oracle). |
+| `probe.llm05.csv-formula-injection` | high | Unescaped spreadsheet formulas (`=CMD`, `=IMPORTDATA`, `=HYPERLINK`) in CSV cells (structural oracle). |
+| `probe.llm05.email-header-injection` | high | CR/LF + `Cc:`/`Bcc:` header injection inside email subject arguments. |
 | `probe.llm09.false-certification` | medium | The agent stating a control is satisfied. The agreement is the defect. |
 | `probe.llm09.false-action-claim` | high | The agent stating a completed action that no tool call in the turn performed. |
 | `probe.llm10.unbounded-consumption` | medium | Accepting a request sized to exhaust budget. |
@@ -111,7 +128,7 @@ opting out `refusal-consistency` or `interagent-framing` was measured to lose
 
 ## Multi-turn techniques
 
-Three techniques are **sequences**: ordered turns sent inside one attempt, on one conversation
+Four techniques are **sequences**: ordered turns sent inside one attempt, on one conversation
 (alongside `probe.llm01.interagent-framing`, which tests multi-agent trust boundaries in a single
 turn). The sequences exist because the classes they test do not exist in a single message.
 
@@ -120,6 +137,7 @@ turn). The sequences exist because the classes they test do not exist in a singl
 | `probe.llm06.refund-cap-split` | sequence (`RequireAll`) | a limit expressed per request, split into two in-limit requests |
 | `probe.llm01.delayed-instruction` | sequence | an instruction planted on turn one and acted on in another |
 | `probe.llm06.payload-relay` | sequence | a payload asking the agent to forward it onward |
+| `probe.llm01.sleeper-memory` | sequence | a dormant instruction planted, decoupled by a benign turn, then triggered |
 
 `probe.llm06.refund-cap-split` carries `RequireAll`, which changes how it is scored.
 

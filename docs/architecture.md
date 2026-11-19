@@ -6,19 +6,24 @@ a deliberate design goal: a security tool nobody can audit is a security tool
 nobody will act on.
 
 ```
-cmd/sixi-scanner          flags, exit codes, report rendering
+cmd/sixi-scanner          flags, exit codes, scan / surface / diff / list CLI
 cmd/techdump              exports the technique set as data, and diffs it
    │
    ├── tech      a technique as data: Definition, Registry, Technique
-   │     └── tech/baseline   the 27 shipped techniques
+   │     └── tech/baseline   the 45 shipped techniques
    │
-   ├── target    where prompts go: Target, and five transports
+   ├── target    where prompts go: Target, retry, multi-shape traces, 7 transports
    │
-   ├── engine    the scan: walks techniques, sends payloads, collects breaks
+   ├── policy    deterministic tool-call policy checker (--context policy)
    │
-   ├── judge     a reply plus a technique becomes a verdict
+   ├── toolscan  static MCP/A2A tool-poisoning & cross-tool shadowing analyzer
+   ├── surface   passive MCP & A2A advertised-surface / trust-posture prober
    │
-   └── report    the result, in JSON / SARIF 2.1.0 / Markdown
+   ├── engine    the scan: walks techniques, checks wire policy, reproduces breaks
+   │
+   ├── judge     markers, structural oracles, recitation, declined-then-produced, narration cap
+   │
+   └── report    JSON / SARIF 2.1.0 / Markdown / HTML, redaction, and scan diff
 ```
 
 Dependencies run one way only. `engine` imports `judge`, `report`, `target` and

@@ -108,6 +108,17 @@ breadth:** 8 distinct violating attacks on the stateless lane, against 67 for
 garak and 89 for promptfoo. See the
 [v0.8.3 write-up](https://github.com/radeksixi/agent-redteam-benchmark/blob/main/results/2026-10-12-sixi-oss-v83/README.md).
 
+### Verified for `v1.0.0`
+
+Before tagging `v1.0.0`, the deterministic judge, tool-policy engine, and MCP/A2A transports were verified on both the recorded Foundry corpus and a live multi-protocol Google ADK target ([adk-demo-target](https://github.com/radeksixi/adk-demo-target)) running locally:
+
+- **Foundry 1,480-turn offline replay (zero LLM judge calls):** marker-only precision rose from `0.667` (`58 TP / 29 FP`) in `v0.10.0` to **`0.763` (`58 TP / 18 FP`, -38% false positives)** with zero recall loss (`30/61 = 0.492`), eliminating 7/7 `training-data-extraction` FPs and cutting `credential-elicitation` FPs in half.
+- **Live Atlas 3-rung defence ladder (`gemma4:e4b-it-qat`, `qwen3.8:27b`):** on `gemma4:e4b-it-qat`, findings dropped monotonically across `none` (8 findings, 18 server-oracle leaks) → `basic` (6 findings, 7 leaks) → `hardened` (1 real remaining finding: multi-turn `sleeper-memory` bypassing regex input guards; 0 server leaks).
+- **Live seeded tool-call policy enforcement (`--seed`, `--trace-path tool_calls`, `--context atlas-context.json`):** on `none`, `sixi-scanner` observed 24 real ADK tool calls and deterministically caught `refund-cap-split` (`cumulative 60 CHF > 50 CHF`), `tool-bola` (`ACC-9999`), and `payload-relay` (`send_email`) with zero LLM judge calls; on `hardened` (22 tool calls, 0 server oracle breaches), it exited `0` cleanly.
+- **Live MCP & A2A end-to-end:** passive `surface` scored 0 poisoning FPs on clean MCP/A2A endpoints and caught poisoned MCP tool descriptions, poisoned A2A skill cards, and unauthenticated A2A cards; active `--target mcp` caught `json-schema-bypass` and active `--target a2a` maintained multi-turn sessions (19 turns / 11 sessions) and caught `sleeper-memory`.
+
+See [docs/STABILITY.md](docs/STABILITY.md) for the `v1.x` CLI, exit-code, and schema compatibility policy.
+
 ## Install
 
 ```console

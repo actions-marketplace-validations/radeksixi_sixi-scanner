@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish static binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          check-latest: true
+
+      - name: Verify tests before release
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
+      - name: Cross-compile static binaries
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          for pair in \
+            "linux amd64" \
+            "linux arm64" \
+            "darwin amd64" \
+            "darwin arm64" \
+            "windows amd64"; do
+            set -- $pair
+            GOOS=$1
+            GOARCH=$2
+            EXT=""
+            if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
+            OUT="dist/sixi-scanner-${TAG}-${GOOS}-${GOARCH}${EXT}"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -trimpath -ldflags "-s -w -X main.version=${TAG}" \
+              -o "$OUT" ./cmd/sixi-scanner
+          done
+          (cd dist && sha256sum sixi-scanner-* > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/sixi-scanner-* dist/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" dist/sixi-scanner-* dist/SHA256SUMS \
+              --title "sixi-scanner ${TAG}" \
+              --generate-notes
+          fi

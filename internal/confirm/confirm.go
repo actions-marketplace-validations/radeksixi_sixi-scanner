@@ -191,8 +191,9 @@ func (c *Client) Confirm(ctx context.Context, policy, payload, response string) 
 	return v, nil
 }
 
-// ask performs the HTTP call. It is separate so the cache and the budget are not
-// held across a network round trip.
+// ask performs the HTTP call with bounded retries on rate limits and transient
+// server errors. It is separate so the cache and the budget are not held across
+// a network round trip.
 func (c *Client) ask(ctx context.Context, key, policy, payload, response string) (Verdict, error) {
 	body, err := json.Marshal(map[string]any{
 		"model":       c.Model,
@@ -202,42 +203,67 @@ func (c *Client) ask(ctx context.Context, key, policy, payload, response string)
 	if err != nil {
 		return Verdict{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL, bytes.NewReader(body))
-	if err != nil {
-		return Verdict{}, err
+
+	var lastErr error
+	for attempt := 0; attempt < retryMaxAttempts; attempt++ {
+		reqCtx, cancel := context.WithTimeout(ctx, c.Timeout)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.URL, bytes.NewReader(body))
+		if err != nil {
+			cancel()
+			return Verdict{}, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		}
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			cancel()
+			lastErr = err
+			if ctx.Err() != nil || attempt == retryMaxAttempts-1 {
+				return Verdict{}, err
+			}
+			if serr := retrySleep(ctx, confirmRetryDelay(nil, attempt)); serr != nil {
+				return Verdict{}, lastErr
+			}
+			continue
+		}
+
+		raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		cancel()
+		if rerr != nil {
+			return Verdict{}, rerr
+		}
+
+		if retryableConfirmStatus(resp.StatusCode) && attempt < retryMaxAttempts-1 {
+			lastErr = fmt.Errorf("confirm endpoint returned %s", resp.Status)
+			if serr := retrySleep(ctx, confirmRetryDelay(resp, attempt)); serr != nil {
+				return Verdict{}, lastErr
+			}
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return Verdict{}, fmt.Errorf("confirm endpoint returned %s", resp.Status)
+		}
+
+		var completion struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(raw, &completion); err != nil {
+			return Verdict{}, err
+		}
+		if len(completion.Choices) == 0 {
+			return Verdict{}, fmt.Errorf("confirm endpoint returned no choices")
+		}
+		return Parse(completion.Choices[0].Message.Content)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return Verdict{}, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return Verdict{}, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Verdict{}, fmt.Errorf("confirm endpoint returned %s", resp.Status)
-	}
-	var completion struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(raw, &completion); err != nil {
-		return Verdict{}, err
-	}
-	if len(completion.Choices) == 0 {
-		return Verdict{}, fmt.Errorf("confirm endpoint returned no choices")
-	}
-	return Parse(completion.Choices[0].Message.Content)
+	return Verdict{}, lastErr
 }
 
 // jsonObject finds the first {...} in a reply, so a model that prefixes its

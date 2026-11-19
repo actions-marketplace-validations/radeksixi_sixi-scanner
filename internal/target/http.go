@@ -14,44 +14,55 @@ import (
 )
 
 // post sends one request and returns the status, body and elapsed time. Every
-// HTTP transport funnels through here so timeout, header and body-capture
-// behaviour is identical across them.
+// HTTP transport funnels through here so timeout, retry, header and
+// body-capture behaviour is identical across them.
 func post(ctx context.Context, cfg Config, body []byte, contentType string) (int, string, time.Duration, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 30 * time.Second
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
-	if err != nil {
-		return 0, "", 0, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("User-Agent", "sixi-scanner")
-	// A scan must not be served a cached answer.
-	req.Header.Set("Cache-Control", "no-store")
-	for k, v := range cfg.Headers {
-		if k == "" {
+	const maxBody = 2 << 20 // 2 MiB
+	client := clientFor(cfg)
+	start := time.Now()
+
+	for attempt := 0; attempt < retryMaxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
+		if err != nil {
+			return 0, "", 0, fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("User-Agent", "sixi-scanner")
+		// A scan must not be served a cached answer.
+		req.Header.Set("Cache-Control", "no-store")
+		for k, v := range cfg.Headers {
+			if k == "" {
+				continue
+			}
+			req.Header.Set(k, v)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, "", time.Since(start), fmt.Errorf("send request: %w", err)
+		}
+
+		// Cap the read so a hostile or broken endpoint cannot exhaust memory.
+		// The judge only ever looks at the first part of a reply.
+		raw, rerr := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+		resp.Body.Close()
+		if rerr != nil {
+			return resp.StatusCode, "", time.Since(start), fmt.Errorf("read response: %w", rerr)
+		}
+
+		if attempt < retryMaxAttempts-1 && shouldRetryTarget(resp, raw) {
+			if err := retrySleep(ctx, retryDelay(resp, attempt)); err != nil {
+				return resp.StatusCode, string(raw), time.Since(start), nil
+			}
 			continue
 		}
-		req.Header.Set(k, v)
+		return resp.StatusCode, string(raw), time.Since(start), nil
 	}
-
-	start := time.Now()
-	resp, err := clientFor(cfg).Do(req)
-	elapsed := time.Since(start)
-	if err != nil {
-		return 0, "", elapsed, fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Cap the read so a hostile or broken endpoint cannot exhaust memory. The
-	// judge only ever looks at the first part of a reply.
-	const maxBody = 2 << 20 // 2 MiB
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if err != nil {
-		return resp.StatusCode, "", elapsed, fmt.Errorf("read response: %w", err)
-	}
-	return resp.StatusCode, string(raw), elapsed, nil
+	return 0, "", time.Since(start), fmt.Errorf("send request: retry budget exhausted")
 }
 
 // clientKey is everything about a Config that changes how a connection is made.

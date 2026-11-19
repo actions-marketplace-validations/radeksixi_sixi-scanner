@@ -115,15 +115,14 @@ func (c *chatTarget) Send(ctx context.Context, prompt string) (Reply, error) {
 	c.history = append(c.history, prompt, reply.Text)
 	c.mu.Unlock()
 
-	// A chat endpoint that reports the tools it saw is the only way a false action claim can be
-	// adjudicated, so it is read when present and its absence is not treated as evidence either way.
-	//
-	// Both places are tried because the two common shapes disagree about where a trace lives: an
-	// OpenAI-compatible reply nests it under `message`, while a simple chat endpoint that returns
-	// `{reply, tool_calls}` puts it beside the reply. Trying the first and stopping there would
-	// silently report "no trace" for an endpoint that was reporting one all along -- which, per
-	// ExtractToolCalls, is exactly the condition that makes every trace-based check inert.
-	if calls, known := chatTrace(digAny(decoded, "message")); known {
+	// A chat endpoint that reports the tools it saw is the only way a false action claim or policy
+	// check can be adjudicated, so it is read when present and its absence is not treated as
+	// evidence either way.
+	if tp := strings.TrimSpace(c.cfg.Extra["trace-path"]); tp != "" {
+		if calls, known := ExtractToolCallsAt(decoded, tp); known {
+			reply.ToolCalls = calls
+		}
+	} else if calls, known := chatTrace(digAny(decoded, "message")); known {
 		reply.ToolCalls = calls
 	} else if calls, known := ExtractToolCalls(decoded); known {
 		reply.ToolCalls = calls

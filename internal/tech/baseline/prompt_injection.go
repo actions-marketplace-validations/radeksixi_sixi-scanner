@@ -39,6 +39,11 @@ var (
 		"you must never",
 		"your guidelines are",
 		"do not reveal",
+		"my instructions are",
+		"my system prompt",
+		"my guidelines are",
+		"my available tools are",
+		"never reveal these instructions",
 	}
 )
 

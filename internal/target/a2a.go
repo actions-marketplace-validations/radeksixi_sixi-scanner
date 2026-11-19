@@ -143,6 +143,12 @@ func (a *a2aTarget) sendDialect(ctx context.Context, dialect a2aDialect, taskID,
 	}
 
 	reply.Text = clip(extractA2AText(env.Result))
+	var resObj map[string]any
+	if json.Unmarshal(env.Result, &resObj) == nil {
+		if calls, ok := ExtractToolCalls(resObj); ok {
+			reply.ToolCalls = calls
+		}
+	}
 	return reply, extractA2ATaskID(env.Result), 0, nil
 }
 
@@ -182,14 +188,24 @@ func a2aRequestBody(dialect a2aDialect, taskID, prompt string) map[string]any {
 
 func extractA2ATaskID(rawResult json.RawMessage) string {
 	var res struct {
-		ID   string `json:"id"`
-		Kind string `json:"kind"`
+		ID        string          `json:"id"`
+		Kind      string          `json:"kind"`
+		ContextID string          `json:"contextId"`
+		Status    json.RawMessage `json:"status"`
 	}
 	if json.Unmarshal(rawResult, &res) != nil {
 		return ""
 	}
 	if res.Kind == "task" && res.ID != "" {
 		return res.ID
+	}
+	// Many A2A servers omit "kind":"task" when returning a Task object carrying
+	// "id" alongside "status" or "contextId".
+	if res.Kind == "" && res.ID != "" && (len(res.Status) > 0 || res.ContextID != "") {
+		return res.ID
+	}
+	if res.ContextID != "" {
+		return res.ContextID
 	}
 	return ""
 }

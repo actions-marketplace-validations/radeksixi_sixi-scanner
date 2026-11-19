@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestMCPDiscoversToolsSelectsArgAndFlattensContent(t *testing.T) {
@@ -225,4 +226,81 @@ func TestA2ADialectV03SessionContinuityAndV02Fallback(t *testing.T) {
 			t.Errorf("v03Calls=%d v02Calls=%d, want 1 and 2 (pinned after fallback)", v03Calls.Load(), v02Calls.Load())
 		}
 	})
+
+	t.Run("v0.3 preserves taskId when server omits kind field", func(t *testing.T) {
+		var seenTaskIDs []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Params struct {
+					Message struct {
+						TaskID string `json:"taskId"`
+					} `json:"message"`
+				} `json:"params"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			seenTaskIDs = append(seenTaskIDs, req.Params.Message.TaskID)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","result":{
+				"id":"srv-task-nokind-9","contextId":"ctx-9",
+				"status":{"state":"completed"},
+				"artifacts":[{"parts":[{"kind":"text","text":"continuing"}]}]
+			}}`))
+		}))
+		defer srv.Close()
+
+		tg, err := NewA2A(Config{URL: srv.URL})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := WithSession(context.Background(), "probe-nokind")
+		if _, err := tg.Send(ctx, "turn 1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tg.Send(ctx, "turn 2"); err != nil {
+			t.Fatal(err)
+		}
+		if len(seenTaskIDs) != 2 || seenTaskIDs[0] != "" || seenTaskIDs[1] != "srv-task-nokind-9" {
+			t.Errorf("taskIDs = %v, want ['', 'srv-task-nokind-9']", seenTaskIDs)
+		}
+	})
+}
+
+func TestMCPRecordsLatencyAndExtractsToolCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","result":{}}`))
+		case "tools/list":
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"2","result":{"tools":[
+				{"name":"ask","inputSchema":{"properties":{"query":{"type":"string"}}}}
+			]}}`))
+		case "tools/call":
+			time.Sleep(2 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"3","result":{
+				"content":[{"type":"text","text":"Done"}],
+				"tool_calls":[{"name":"lookup_customer","arguments":{"customer_id":"NW-1001"}}]
+			}}`))
+		}
+	}))
+	defer srv.Close()
+
+	tg, err := NewMCP(Config{URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := tg.Send(context.Background(), "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Latency <= 0 {
+		t.Errorf("reply.Latency = %v, want > 0", reply.Latency)
+	}
+	if len(reply.ToolCalls) != 1 || reply.ToolCalls[0].Name != "lookup_customer" {
+		t.Errorf("reply.ToolCalls = %+v, want [lookup_customer]", reply.ToolCalls)
+	}
 }

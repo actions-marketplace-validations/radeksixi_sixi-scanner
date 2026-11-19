@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // mcpTarget reaches an agent or tool server exposed over the Model Context
@@ -57,7 +58,7 @@ func (m *mcpTarget) Describe() string {
 	return "mcp " + redactURL(m.cfg.URL)
 }
 
-func (m *mcpTarget) rpc(ctx context.Context, method string, params any) (json.RawMessage, int, string, error) {
+func (m *mcpTarget) rpc(ctx context.Context, method string, params any) (json.RawMessage, int, string, time.Duration, error) {
 	id := m.nextID.Add(1)
 	body := map[string]any{
 		"jsonrpc": "2.0",
@@ -69,17 +70,17 @@ func (m *mcpTarget) rpc(ctx context.Context, method string, params any) (json.Ra
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("mcp encode %s: %w", method, err)
+		return nil, 0, "", 0, fmt.Errorf("mcp encode %s: %w", method, err)
 	}
-	status, respBody, _, err := post(ctx, m.cfg, raw, "application/json")
+	status, respBody, elapsed, err := post(ctx, m.cfg, raw, "application/json")
 	if err != nil {
-		return nil, status, respBody, fmt.Errorf("mcp %s: %w", method, err)
+		return nil, status, respBody, elapsed, fmt.Errorf("mcp %s: %w", method, err)
 	}
 	if status == 401 || status == 403 {
-		return nil, status, respBody, fmt.Errorf("mcp %s: HTTP %d auth rejected", method, status)
+		return nil, status, respBody, elapsed, fmt.Errorf("mcp %s: HTTP %d auth rejected", method, status)
 	}
 	if status == 429 || status >= 500 {
-		return nil, status, respBody, fmt.Errorf("mcp %s: HTTP %d", method, status)
+		return nil, status, respBody, elapsed, fmt.Errorf("mcp %s: HTTP %d", method, status)
 	}
 	var env struct {
 		Result json.RawMessage `json:"result"`
@@ -89,15 +90,15 @@ func (m *mcpTarget) rpc(ctx context.Context, method string, params any) (json.Ra
 		} `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(respBody), &env); err != nil {
-		return nil, status, respBody, fmt.Errorf("mcp %s: malformed JSON-RPC reply: %w", method, err)
+		return nil, status, respBody, elapsed, fmt.Errorf("mcp %s: malformed JSON-RPC reply: %w", method, err)
 	}
 	if env.Error != nil {
 		// A JSON-RPC error on tools/call is a target refusal/rejection, which is a result to judge,
 		// not a transport failure. Encode it as a JSON string so mcpText returns it verbatim.
 		msg, _ := json.Marshal("[MCP ERROR] " + env.Error.Message)
-		return msg, status, respBody, nil
+		return msg, status, respBody, elapsed, nil
 	}
-	return env.Result, status, respBody, nil
+	return env.Result, status, respBody, elapsed, nil
 }
 
 // ensureTools discovers tools once per connector, after a best-effort initialize handshake.
@@ -109,13 +110,13 @@ func (m *mcpTarget) ensureTools(ctx context.Context) ([]MCPTool, error) {
 	}
 	// Best-effort initialize: some servers require it before tools/list, while older stateless
 	// JSON-RPC servers return -32601. Failures here never abort discovery.
-	_, _, _, _ = m.rpc(ctx, "initialize", map[string]any{
+	_, _, _, _, _ = m.rpc(ctx, "initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "sixi-scanner", "version": "1.0"},
 	})
 
-	result, _, _, err := m.rpc(ctx, "tools/list", nil)
+	result, _, _, _, err := m.rpc(ctx, "tools/list", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -172,18 +173,26 @@ func (m *mcpTarget) Send(ctx context.Context, prompt string) (Reply, error) {
 		return Reply{}, fmt.Errorf("mcp: tool %q not found on server", m.toolName)
 	}
 	argName := MCPArgNameFor(chosen.InputSchema)
-	result, status, raw, err := m.rpc(ctx, "tools/call", map[string]any{
+	result, status, raw, elapsed, err := m.rpc(ctx, "tools/call", map[string]any{
 		"name":      chosen.Name,
 		"arguments": map[string]any{argName: prompt},
 	})
 	if err != nil {
-		return Reply{Status: status, Raw: raw}, err
+		return Reply{Status: status, Latency: elapsed, Raw: raw}, err
 	}
-	return Reply{
-		Text:   clip(mcpText(result)),
-		Status: status,
-		Raw:    raw,
-	}, nil
+	reply := Reply{
+		Text:    clip(mcpText(result)),
+		Status:  status,
+		Latency: elapsed,
+		Raw:     raw,
+	}
+	var resObj map[string]any
+	if json.Unmarshal(result, &resObj) == nil {
+		if calls, ok := ExtractToolCalls(resObj); ok {
+			reply.ToolCalls = calls
+		}
+	}
+	return reply, nil
 }
 
 func selectMCPTool(tools []MCPTool, want string) (MCPTool, bool) {

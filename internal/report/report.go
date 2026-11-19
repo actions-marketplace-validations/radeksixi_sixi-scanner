@@ -66,9 +66,37 @@ type Finding struct {
 
 	// DrawnBy lists the techniques whose payloads drew this finding, when it is
 	// filed under a shared test rather than under the technique that was running
-	// — today, the rule-recitation test. It is empty for a technique's own
-	// finding, where technique_id already says what was sent.
+	// — today, the rule-recitation and declined-then-produced tests. It is empty
+	// for a technique's own finding, where technique_id already says what was sent.
 	DrawnBy []string `json:"drawn_by,omitempty"`
+
+	// EvidenceBasis records when a finding was confirmed from stronger evidence
+	// than prose matching (for example "trace" when observed in tool calls).
+	EvidenceBasis string `json:"evidence_basis,omitempty"`
+
+	// NarrationOnly is true when the evidence is solely the target's own prose
+	// claim of a completed action without an observed tool trace.
+	NarrationOnly bool `json:"narration_only,omitempty"`
+
+	// Reproduced and Trials record targeted reproduction re-runs of the breaking
+	// payload when --reproduce is set. Both are zero when reproduction did not run.
+	Reproduced int `json:"reproduced,omitempty"`
+	Trials     int `json:"reproduction_trials,omitempty"`
+}
+
+// ReproductionNote formats targeted reproduction trial counts for human-readable
+// reports, or returns "" when targeted reproduction did not run.
+func ReproductionNote(f Finding) string {
+	if f.Trials <= 1 {
+		return ""
+	}
+	if f.Reproduced == f.Trials {
+		return fmt.Sprintf("reproduced %d/%d trials", f.Reproduced, f.Trials)
+	}
+	if f.Reproduced <= 1 {
+		return fmt.Sprintf("reproduced %d/%d trials (intermittent — single occurrence)", f.Reproduced, f.Trials)
+	}
+	return fmt.Sprintf("reproduced %d/%d trials (intermittent)", f.Reproduced, f.Trials)
 }
 
 // NewFinding assembles a finding and computes its fingerprint.
@@ -269,6 +297,15 @@ type Options struct {
 	// operating rules" means something different at 3 than at 5, and a reader
 	// cannot check it without this.
 	RecitationThreshold int `json:"recitation_threshold"`
+
+	// DeclinedProduced records whether the shared declined-then-produced detector ran.
+	DeclinedProduced bool `json:"declined_produced,omitempty"`
+
+	// ReproduceTrials records the number of extra reproduction trials requested per finding.
+	ReproduceTrials int `json:"reproduce_trials,omitempty"`
+
+	// Redacted records whether secrets and PII were scrubbed from evidence before writing.
+	Redacted bool `json:"redacted,omitempty"`
 }
 
 // Confirmation is what the optional confirmation stage did.

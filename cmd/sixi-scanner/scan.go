@@ -72,6 +72,7 @@ func cmdScan(args []string, stdout, stderr io.Writer) result {
 
 		insecure = fs.Bool("insecure", false, "skip TLS verification (self-signed staging endpoints)")
 		redact   = fs.Bool("redact", false, "scrub secrets, tokens, emails, IPs and long account numbers from finding evidence before writing reports")
+		logJSONL = fs.String("log-jsonl", "", "write one JSON line per attempt (prompt, reply, tool calls, latency, mechanism, verdict) for observability")
 		quiet    = fs.Bool("quiet", false, "only print the report to stdout")
 		outPath  = fs.String("out", "", "also write the report to this file")
 		format   = fs.String("format", "text", "stdout format: text, json, sarif, markdown, html")
@@ -232,11 +233,37 @@ Examples:
 		scanCfg.Confirm = stage
 		scanCfg.Policy = tc.Purpose
 	}
+	var attemptLog *report.JSONLLogger
+	if *logJSONL != "" {
+		var err error
+		attemptLog, err = report.OpenJSONLLogger(*logJSONL)
+		if err != nil {
+			return result{code: exitUsage, err: err}
+		}
+		defer attemptLog.Close()
+	}
+
+	var printer func(report.Attempt)
 	if !*quiet {
-		scanCfg.OnAttempt = progressPrinter(stderr)
+		printer = progressPrinter(stderr)
+	}
+	if printer != nil || attemptLog != nil {
+		scanCfg.OnAttempt = func(a report.Attempt) {
+			if printer != nil {
+				printer(a)
+			}
+			if attemptLog != nil {
+				attemptLog.Write(a)
+			}
+		}
 	}
 
 	scan, err := engine.Run(ctx, scanCfg)
+	if attemptLog != nil {
+		if cerr := attemptLog.Close(); cerr != nil && err == nil {
+			return result{code: exitUsage, err: fmt.Errorf("flush --log-jsonl: %w", cerr)}
+		}
+	}
 	if err != nil {
 		return result{code: exitUsage, err: err}
 	}

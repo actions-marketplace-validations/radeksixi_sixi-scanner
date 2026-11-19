@@ -278,3 +278,40 @@ func TestScanMCPAndA2AConnectorsAndDeterministicPolicy(t *testing.T) {
 		t.Error("HTML report missing doctype/reproduction badge or failed redaction")
 	}
 }
+
+func TestLogJSONLAndScanStats(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "attempts.jsonl")
+	stdout, stderr, code := exec("scan",
+		"--target", "echo",
+		"--only", "probe.llm01.instruction-override,probe.llm05.ansi-escape",
+		"--attempts", "1",
+		"--log-jsonl", logPath,
+		"--format", "json",
+		"--quiet",
+	)
+	if code != exitFindings {
+		t.Fatalf("echo scan exit = %d, want 1 (stderr: %s)", code, stderr)
+	}
+	var scan report.Scan
+	if err := json.Unmarshal([]byte(stdout), &scan); err != nil {
+		t.Fatalf("parse scan json: %v", err)
+	}
+	if scan.Stats == nil || scan.Stats.RequestsTotal < 2 {
+		t.Fatalf("expected scan.Stats populated, got %+v", scan.Stats)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log-jsonl: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != scan.Stats.RequestsTotal {
+		t.Errorf("jsonl lines = %d, want %d", len(lines), scan.Stats.RequestsTotal)
+	}
+	var first report.Attempt
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("parse first jsonl line: %v", err)
+	}
+	if first.ScanID == "" || first.Timestamp.IsZero() {
+		t.Errorf("expected scan_id and ts on attempt log, got %+v", first)
+	}
+}

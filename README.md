@@ -241,9 +241,11 @@ could run nothing exits 2 rather than passing.
 Write a report to a file with `--out`; the format is taken from the extension
 (`.json`, `.sarif`, `.md`, `.html`) unless `--format` says otherwise. Pass
 `--redact` to scrub secrets, tokens, emails, IPv4 addresses and long account
-numbers from finding evidence while keeping fingerprints stable, and
-`--reproduce N` to re-run only breaking payloads `N` extra times and record
-`k/n` reproducibility.
+numbers from finding evidence while keeping fingerprints stable, `--reproduce N`
+to re-run only breaking payloads `N` extra times and record `k/n`
+reproducibility, and `--log-jsonl <path>` to stream one structured JSONL record
+per attempt (prompt, reply, tool calls, latency, mechanism, verdict) for
+offline analysis alongside the aggregate `stats` block in JSON reports.
 
 ## In CI
 
@@ -377,7 +379,7 @@ This is a complete tool for probing an endpoint you can reach, and it is
 deliberately small enough to read in an afternoon. If you need more than this,
 the honest answer is usually that you need a different tool rather than a bigger
 one: a larger technique library bought on trust is worth less than the
-twenty-seven techniques here, each of which you can check.
+forty-five techniques here, each of which you can check.
 
 ## Security
 

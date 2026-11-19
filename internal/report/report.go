@@ -140,9 +140,18 @@ func Fingerprint(f Finding) string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
+// ToolCallRecord is a single tool call observed in a target reply.
+type ToolCallRecord struct {
+	Name string `json:"name"`
+	Args string `json:"args,omitempty"`
+}
+
 // Attempt is one send, whether or not it produced anything.
 type Attempt struct {
-	TechniqueID string `json:"technique_id"`
+	Timestamp   time.Time `json:"ts,omitempty"`
+	ScanID      string    `json:"scan_id,omitempty"`
+	SessionID   string    `json:"session_id,omitempty"`
+	TechniqueID string    `json:"technique_id"`
 	// Confirmed is true when a confirmation stage upheld this break; Rejected
 	// is true when one overturned a marker that had matched. Both are evidence
 	// about the verdict, so both belong on the attempt and not only in a count.
@@ -154,46 +163,73 @@ type Attempt struct {
 	Unbacked bool `json:"unbacked_claim,omitempty"`
 	// Recited is true when this attempt's break is a rule recitation rather than the technique's
 	// own evidence. It is filed under the recitation definition, and the technique carries on.
-	Recited    bool          `json:"recited,omitempty"`
-	Round      int           `json:"round"`
-	Attempt    int           `json:"attempt"`
-	Prompt     string        `json:"prompt"`
-	Response   string        `json:"response,omitempty"`
-	Status     int           `json:"status,omitempty"`
-	Latency    time.Duration `json:"latency_ms"`
-	Broke      bool          `json:"broke"`
-	Confidence float64       `json:"confidence,omitempty"`
-	Reason     string        `json:"reason,omitempty"`
-	Error      string        `json:"error,omitempty"`
+	Recited          bool          `json:"recited,omitempty"`
+	DeclinedProduced bool          `json:"declined_produced,omitempty"`
+	ReproTrial       bool          `json:"repro_trial,omitempty"`
+	Mechanism        string        `json:"mechanism,omitempty"`
+	EvidenceBasis    string        `json:"evidence_basis,omitempty"`
+	NarrationOnly    bool          `json:"narration_only,omitempty"`
+	Round            int           `json:"round"`
+	Attempt          int           `json:"attempt"`
+	Prompt           string        `json:"prompt"`
+	Response         string        `json:"response,omitempty"`
+	ToolCallsJSON    string        `json:"tool_calls,omitempty"`
+	Status           int           `json:"status,omitempty"`
+	Latency          time.Duration `json:"latency_ms"`
+	Broke            bool          `json:"broke"`
+	Confidence       float64       `json:"confidence,omitempty"`
+	Reason           string        `json:"reason,omitempty"`
+	Error            string        `json:"error,omitempty"`
 }
 
 // attemptJSON is Attempt as it is written out. Latency is a time.Duration, which encodes as a
 // count of nanoseconds, under a key that says milliseconds; the wire form states the unit it is
 // named for.
 type attemptJSON struct {
-	TechniqueID string  `json:"technique_id"`
-	Confirmed   bool    `json:"confirmed,omitempty"`
-	Rejected    bool    `json:"rejected,omitempty"`
-	Unbacked    bool    `json:"unbacked_claim,omitempty"`
-	Recited     bool    `json:"recited,omitempty"`
-	Round       int     `json:"round"`
-	Attempt     int     `json:"attempt"`
-	Prompt      string  `json:"prompt"`
-	Response    string  `json:"response,omitempty"`
-	Status      int     `json:"status,omitempty"`
-	LatencyMS   int64   `json:"latency_ms"`
-	Broke       bool    `json:"broke"`
-	Confidence  float64 `json:"confidence,omitempty"`
-	Reason      string  `json:"reason,omitempty"`
-	Error       string  `json:"error,omitempty"`
+	Timestamp        *time.Time      `json:"ts,omitempty"`
+	ScanID           string          `json:"scan_id,omitempty"`
+	SessionID        string          `json:"session_id,omitempty"`
+	TechniqueID      string          `json:"technique_id"`
+	Confirmed        bool            `json:"confirmed,omitempty"`
+	Rejected         bool            `json:"rejected,omitempty"`
+	Unbacked         bool            `json:"unbacked_claim,omitempty"`
+	Recited          bool            `json:"recited,omitempty"`
+	DeclinedProduced bool            `json:"declined_produced,omitempty"`
+	ReproTrial       bool            `json:"repro_trial,omitempty"`
+	Mechanism        string          `json:"mechanism,omitempty"`
+	EvidenceBasis    string          `json:"evidence_basis,omitempty"`
+	NarrationOnly    bool            `json:"narration_only,omitempty"`
+	Round            int             `json:"round"`
+	Attempt          int             `json:"attempt"`
+	Prompt           string          `json:"prompt"`
+	Response         string          `json:"response,omitempty"`
+	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
+	Status           int             `json:"status,omitempty"`
+	LatencyMS        int64           `json:"latency_ms"`
+	Broke            bool            `json:"broke"`
+	Confidence       float64         `json:"confidence,omitempty"`
+	Reason           string          `json:"reason,omitempty"`
+	Error            string          `json:"error,omitempty"`
 }
 
 // MarshalJSON writes the attempt with its latency in milliseconds.
 func (a Attempt) MarshalJSON() ([]byte, error) {
+	var ts *time.Time
+	if !a.Timestamp.IsZero() {
+		t := a.Timestamp.UTC()
+		ts = &t
+	}
+	var tc json.RawMessage
+	if a.ToolCallsJSON != "" {
+		tc = json.RawMessage(a.ToolCallsJSON)
+	}
 	return json.Marshal(attemptJSON{
+		Timestamp: ts, ScanID: a.ScanID, SessionID: a.SessionID,
 		TechniqueID: a.TechniqueID, Confirmed: a.Confirmed, Rejected: a.Rejected,
-		Unbacked: a.Unbacked, Recited: a.Recited, Round: a.Round, Attempt: a.Attempt,
-		Prompt: a.Prompt, Response: a.Response, Status: a.Status,
+		Unbacked: a.Unbacked, Recited: a.Recited, DeclinedProduced: a.DeclinedProduced,
+		ReproTrial: a.ReproTrial, Mechanism: a.Mechanism, EvidenceBasis: a.EvidenceBasis,
+		NarrationOnly: a.NarrationOnly, Round: a.Round, Attempt: a.Attempt,
+		Prompt: a.Prompt, Response: a.Response, ToolCalls: tc, Status: a.Status,
 		LatencyMS: a.Latency.Milliseconds(), Broke: a.Broke, Confidence: a.Confidence,
 		Reason: a.Reason, Error: a.Error,
 	})
@@ -205,14 +241,37 @@ func (a *Attempt) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &w); err != nil {
 		return err
 	}
+	var ts time.Time
+	if w.Timestamp != nil {
+		ts = *w.Timestamp
+	}
 	*a = Attempt{
+		Timestamp: ts, ScanID: w.ScanID, SessionID: w.SessionID,
 		TechniqueID: w.TechniqueID, Confirmed: w.Confirmed, Rejected: w.Rejected,
-		Unbacked: w.Unbacked, Recited: w.Recited, Round: w.Round, Attempt: w.Attempt,
-		Prompt: w.Prompt, Response: w.Response, Status: w.Status,
+		Unbacked: w.Unbacked, Recited: w.Recited, DeclinedProduced: w.DeclinedProduced,
+		ReproTrial: w.ReproTrial, Mechanism: w.Mechanism, EvidenceBasis: w.EvidenceBasis,
+		NarrationOnly: w.NarrationOnly, Round: w.Round, Attempt: w.Attempt,
+		Prompt: w.Prompt, Response: w.Response, ToolCallsJSON: string(w.ToolCalls), Status: w.Status,
 		Latency: time.Duration(w.LatencyMS) * time.Millisecond, Broke: w.Broke,
 		Confidence: w.Confidence, Reason: w.Reason, Error: w.Error,
 	}
 	return nil
+}
+
+// ScanStats summarises operational telemetry for a scan run (latency percentiles,
+// request outcomes, tool-call observations, and breaks grouped by detector mechanism).
+type ScanStats struct {
+	DurationMS            int64          `json:"duration_ms"`
+	RequestsTotal         int            `json:"requests_total"`
+	RequestsOK            int            `json:"requests_ok"`
+	RequestsError         int            `json:"requests_error"`
+	LatencyP50MS          int64          `json:"latency_p50_ms"`
+	LatencyP95MS          int64          `json:"latency_p95_ms"`
+	LatencyMaxMS          int64          `json:"latency_max_ms"`
+	ToolCallsObserved     int            `json:"tool_calls_observed"`
+	NarrationOnlyFindings int            `json:"narration_only_findings,omitempty"`
+	ReproTrialsRun        int            `json:"repro_trials_run,omitempty"`
+	BreaksByMechanism     map[string]int `json:"breaks_by_mechanism,omitempty"`
 }
 
 // Scan is the whole result of one run.
@@ -265,6 +324,9 @@ type Scan struct {
 	// confirmed nothing: without this a reader cannot tell a strict report from
 	// an unchecked one.
 	Confirm *Confirmation `json:"confirmation,omitempty"`
+
+	// Stats holds operational telemetry computed from all scan attempts.
+	Stats *ScanStats `json:"stats,omitempty"`
 
 	// Findings is the result, most severe first once Summarise has run.
 	Findings []Finding `json:"findings"`

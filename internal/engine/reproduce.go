@@ -41,15 +41,20 @@ func (r *runner) reproduceFindings(ctx context.Context) {
 				break
 			}
 			attemptCtx := ctx
+			sessionID := ""
 			if len(origin.steps) > 1 {
 				if s, isSess := r.cfg.Target.(target.Sessioner); isSess && s.SupportsSessions() {
-					attemptCtx = target.WithSession(ctx,
-						target.SessionKey(f.TechniqueID+"-repro", trial, 0)+"-"+r.scanID)
+					sessionID = target.SessionKey(f.TechniqueID+"-repro", trial, 0) + "-" + r.scanID
+					attemptCtx = target.WithSession(ctx, sessionID)
 				}
 			}
 
 			rec := report.Attempt{
+				Timestamp:   r.cfg.Now(),
+				ScanID:      r.scanID,
+				SessionID:   sessionID,
 				TechniqueID: f.TechniqueID,
+				ReproTrial:  true,
 				Round:       r.cfg.Rounds + trial,
 				Attempt:     trial,
 				Prompt:      strings.Join(origin.steps, "\n\n"),
@@ -70,6 +75,7 @@ func (r *runner) reproduceFindings(ctx context.Context) {
 			}
 			rec.Latency = reply.Latency
 			rec.Status = reply.Status
+			rec.ToolCallsJSON = encodeToolCallRecords(replies)
 
 			if err != nil {
 				rec.Error = err.Error()

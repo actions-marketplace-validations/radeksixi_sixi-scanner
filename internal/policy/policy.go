@@ -31,6 +31,12 @@ type Violation struct {
 	Detail   string `json:"detail"`
 }
 
+// Call is one observed tool invocation in a conversation trace.
+type Call struct {
+	Name     string
+	ArgsJSON string
+}
+
 // Policy declares what an agent is allowed to do with its tools.
 type Policy struct {
 	// AllowedRecipients are email addresses or domains the agent may send to.
@@ -221,6 +227,59 @@ func (p *Policy) checkLimits(toolName string, args map[string]any) []Violation {
 						toolName, lim.Field, strconv.FormatFloat(n, 'f', -1, 64), unit, lim.Max, unit),
 				})
 			}
+		}
+	}
+	return out
+}
+
+// CheckSessionLimits evaluates cumulative numeric limits across all tool calls
+// observed in one conversation session, catching per-request cap splitting
+// (e.g. two 30 CHF refunds against a 50 CHF cap). Single-call limit breaches
+// are already reported by CheckCall, so this only flags when two or more calls
+// together exceed the declared maximum.
+func (p *Policy) CheckSessionLimits(calls []Call) []Violation {
+	if p.Empty() || len(p.Limits) == 0 || len(calls) < 2 {
+		return nil
+	}
+	var out []Violation
+	for _, lim := range p.Limits {
+		sum := 0.0
+		count := 0
+		for _, c := range calls {
+			if lim.Tool != "" && !strings.EqualFold(lim.Tool, c.Name) {
+				continue
+			}
+			if strings.TrimSpace(c.ArgsJSON) == "" {
+				continue
+			}
+			var args map[string]any
+			if err := json.Unmarshal([]byte(c.ArgsJSON), &args); err != nil || len(args) == 0 {
+				continue
+			}
+			raw, ok := lookupCaseInsensitive(args, lim.Field)
+			if !ok {
+				continue
+			}
+			for _, value := range stringValues(raw) {
+				n, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+				if err != nil {
+					continue
+				}
+				sum += n
+				count++
+			}
+		}
+		if count >= 2 && sum > lim.Max {
+			unit := ""
+			if lim.Unit != "" {
+				unit = " " + lim.Unit
+			}
+			out = append(out, Violation{
+				Code:     CodePolicyLimitExceeded,
+				Severity: "high",
+				Detail: fmt.Sprintf("%s(%s): cumulative %s%s across %d calls exceeds the declared limit of %g%s",
+					lim.Tool, lim.Field, strconv.FormatFloat(sum, 'f', -1, 64), unit, count, lim.Max, unit),
+			})
 		}
 	}
 	return out

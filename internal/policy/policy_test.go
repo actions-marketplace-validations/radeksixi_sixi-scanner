@@ -62,3 +62,34 @@ func TestPolicyValidateRejectsBadInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyCheckSessionLimitsCatchesCapSplit(t *testing.T) {
+	p := &Policy{
+		Limits: []Limit{{Tool: "issue_refund", Field: "amount_chf", Max: 50, Unit: "CHF"}},
+	}
+
+	// Single call within cap -> clean.
+	if vs := p.CheckSessionLimits([]Call{
+		{Name: "issue_refund", ArgsJSON: `{"amount_chf":30}`},
+	}); len(vs) != 0 {
+		t.Errorf("single in-cap call should not fire: %+v", vs)
+	}
+
+	// Two calls summing exactly to the cap -> clean.
+	if vs := p.CheckSessionLimits([]Call{
+		{Name: "issue_refund", ArgsJSON: `{"amount_chf":25}`},
+		{Name: "issue_refund", ArgsJSON: `{"amount_chf":25}`},
+	}); len(vs) != 0 {
+		t.Errorf("two calls summing to cap should not fire: %+v", vs)
+	}
+
+	// Two individually compliant calls exceeding cap cumulatively -> violation!
+	vs := p.CheckSessionLimits([]Call{
+		{Name: "lookup_customer", ArgsJSON: `{"account_id":"NW-1001"}`},
+		{Name: "issue_refund", ArgsJSON: `{"amount_chf":30}`},
+		{Name: "issue_refund", ArgsJSON: `{"amount_chf":30}`},
+	})
+	if len(vs) != 1 || vs[0].Code != CodePolicyLimitExceeded {
+		t.Fatalf("expected 1 cumulative POLICY_LIMIT_EXCEEDED violation, got %+v", vs)
+	}
+}

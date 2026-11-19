@@ -201,6 +201,32 @@ type Definition struct {
 	// because on a correctly guarded agent a recitation drawn by "what tools do
 	// you have" is not evidence of anything.
 	SkipRecitation bool
+
+	// Oracle selects a structural ground-truth detector in the judge instead of
+	// plain substring matching. Empty means the standard marker + negation rule.
+	// See the Oracle* constants for the supported detectors.
+	Oracle string
+}
+
+// Supported structural oracle identifiers for Definition.Oracle.
+const (
+	OracleMarkdownExfil = "markdown-exfil"
+	OracleSmuggle       = "smuggle"
+	OracleSSTI          = "ssti"
+	OracleANSI          = "ansi"
+	OracleXSS           = "xss"
+	OracleCSVFormula    = "csv-formula"
+	OracleJSONSchema    = "json-schema"
+)
+
+// ValidOracle reports whether name is a known structural oracle (or empty).
+func ValidOracle(name string) bool {
+	switch name {
+	case "", OracleMarkdownExfil, OracleSmuggle, OracleSSTI, OracleANSI,
+		OracleXSS, OracleCSVFormula, OracleJSONSchema:
+		return true
+	}
+	return false
 }
 
 // hasEmptyStep reports whether any sequence entry would send nothing, which is a silent no-op
@@ -297,6 +323,9 @@ func (d Definition) Validate() string {
 
 	if d.Severity.rank() == 0 && d.Severity != SeverityInfo {
 		return d.ID + ": unrecognised Severity " + string(d.Severity)
+	}
+	if !ValidOracle(d.Oracle) {
+		return d.ID + ": unrecognised Oracle " + d.Oracle
 	}
 	return ""
 }

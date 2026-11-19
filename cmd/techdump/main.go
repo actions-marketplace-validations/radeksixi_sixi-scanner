@@ -61,10 +61,11 @@ type record struct {
 	// The four switches below decide how a reply is scored, not what is sent. A technique with
 	// ClaimCheck set and one without are different techniques that happen to share their text,
 	// so an export that leaves the switches out describes neither.
-	RequireAll     bool `json:"require_all,omitempty"`
-	ClaimCheck     bool `json:"claim_check,omitempty"`
-	RelayCheck     bool `json:"relay_check,omitempty"`
-	SkipRecitation bool `json:"skip_recitation,omitempty"`
+	RequireAll     bool   `json:"require_all,omitempty"`
+	ClaimCheck     bool   `json:"claim_check,omitempty"`
+	RelayCheck     bool   `json:"relay_check,omitempty"`
+	SkipRecitation bool   `json:"skip_recitation,omitempty"`
+	Oracle         string `json:"oracle,omitempty"`
 }
 
 // dump is the whole export.
@@ -155,6 +156,7 @@ func collect(reg *tech.Registry) []record {
 			Tags:       append([]string(nil), d.Tags...),
 			RequireAll: d.RequireAll, ClaimCheck: d.ClaimCheck,
 			RelayCheck: d.RelayCheck, SkipRecitation: d.SkipRecitation,
+			Oracle: d.Oracle,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -244,6 +246,9 @@ func writeGo(records []record) error {
 		}
 		if r.SkipRecitation {
 			fmt.Fprintf(&b, "\t\tSkipRecitation: true,\n")
+		}
+		if r.Oracle != "" {
+			fmt.Fprintf(&b, "\t\tOracle:      %s,\n", quote(r.Oracle))
 		}
 		fmt.Fprintf(&b, "\t},\n")
 	}
@@ -344,7 +349,8 @@ func unchanged(a, b record) bool {
 		a.RequireAll == b.RequireAll &&
 		a.ClaimCheck == b.ClaimCheck &&
 		a.RelayCheck == b.RelayCheck &&
-		a.SkipRecitation == b.SkipRecitation
+		a.SkipRecitation == b.SkipRecitation &&
+		a.Oracle == b.Oracle
 }
 
 func describeChange(a, b record) string {
@@ -362,7 +368,8 @@ func describeChange(a, b record) string {
 		parts = append(parts, "regex markers")
 	}
 	if a.RequireAll != b.RequireAll || a.ClaimCheck != b.ClaimCheck ||
-		a.RelayCheck != b.RelayCheck || a.SkipRecitation != b.SkipRecitation {
+		a.RelayCheck != b.RelayCheck || a.SkipRecitation != b.SkipRecitation ||
+		a.Oracle != b.Oracle {
 		parts = append(parts, "scoring")
 	}
 	if !equalStrings(a.Negations, b.Negations) {

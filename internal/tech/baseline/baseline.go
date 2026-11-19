@@ -29,6 +29,7 @@ func Registry() *tech.Registry {
 	addMisc(r)
 	addMultiTurn(r)
 	addParameterInduction(r)
+	addOracles(r)
 	return r
 }
 

@@ -23,6 +23,7 @@ func TestGoExportCarriesEveryFieldATechniqueSets(t *testing.T) {
 			"ClaimCheck:":     r.ClaimCheck,
 			"RelayCheck:":     r.RelayCheck,
 			"SkipRecitation:": r.SkipRecitation,
+			"Oracle:":         r.Oracle != "",
 		} {
 			has := strings.Contains(out, "\t\t"+field)
 			if has != set {
@@ -47,7 +48,7 @@ func TestGoExportCarriesEveryFieldATechniqueSets(t *testing.T) {
 // A pattern is written so that it reads back as the same pattern.
 func TestGoExportEscapesARegexMarker(t *testing.T) {
 	out := capture(t, "--format", "go", "--only", "probe.llm02.credential-elicitation")
-	if !strings.Contains(out, `RegexMarkers: []string{"\\bsk-[a-z0-9_-]{16,}"}`) {
+	if !strings.Contains(out, `RegexMarkers: []string{`) || !strings.Contains(out, `"\\bsk-[a-z0-9_-]{16,}"`) {
 		t.Errorf("the regex marker was not written as a Go string literal:\n%s", out)
 	}
 }

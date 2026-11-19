@@ -2,16 +2,39 @@
 
 [![CI](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/radeksixi/sixi-scanner)](https://github.com/radeksixi/sixi-scanner/releases) [![Go Reference](https://pkg.go.dev/badge/github.com/radeksixi/sixi-scanner.svg)](https://pkg.go.dev/github.com/radeksixi/sixi-scanner) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Benchmark](https://img.shields.io/badge/benchmark-1st%20precision%20%26%20recall-orange)](https://github.com/radeksixi/agent-redteam-benchmark)
 
-A command-line red-team scanner for LLM agents. It sends probe prompts to an
-endpoint you are authorised to test, judges the replies, and writes out the
-evidence.
+A zero-dependency Go red-team scanner for **LLM agents, MCP servers, and A2A
+endpoints**. Point it at any endpoint you are authorised to test — it sends
+single- and multi-turn attacks, enforces deterministic policies on observed tool
+traces, inspects MCP/A2A metadata passively, and outputs reproducible evidence.
 
 ```console
-$ sixi-scanner scan --url https://your-agent.example/v1/chat/completions
+# Install (or grab a static binary from Releases — Linux, macOS, Windows)
+$ go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@v1.0.0
+
+# 1. Passively check MCP tools & A2A Agent Cards for poisoning (0 prompts sent)
+$ sixi-scanner surface --url https://your-agent.example
+
+# 2. Run 45 active probes + deterministic wire tool policy + JSONL telemetry
+$ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --reproduce 1
 ```
 
-45 techniques · Go standard library only, zero dependencies · reports as JSON,
-SARIF 2.1.0, Markdown or HTML · Apache 2.0.
+**45 techniques** (7 structural oracles, 4 multi-turn sequences) · **Go standard
+library only (0 external dependencies)** · JSON, SARIF 2.1.0, Markdown, HTML &
+`--log-jsonl` · [Download `v1.0.0` binaries](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.0.0) · [v1.0 benchmark write-up](https://radeksixi.github.io/sixi-scanner-1-0-benchmarks-mcp-a2a-and-six-live-bugs/) · Apache 2.0.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sixi-scanner-1-0-defence-ladder-dark.svg">
+    <img alt="Live 3-rung defence ladder on Atlas (Gemma 4 4B): server leaks drop 18 to 7 to 0 across none, basic, and hardened, while 3-turn sleeper-memory still bypasses regex guards." src="docs/assets/sixi-scanner-1-0-defence-ladder-light.svg" width="100%">
+  </picture>
+</p>
+
+### Why teams run it — four measured insights from real agents
+
+- **The prompt-only hardening trap:** on a live Google ADK agent (`gemma4:4b`), adding refusal rules to the system prompt cut secret leaks from `18 → 7`, but *opened* new Swahili, adversarial poetry, and Bad Likert instruction leaks — there were suddenly rules worth reciting.
+- **The regex guard ceiling:** adding input/output guards blocked 15 attacks, cut scan time 2.4×, and dropped secret leaks to `0` — yet a 3-turn **`sleeper-memory` [CRITICAL]** payload (plant → benign turn → trigger) still bypassed static filters on both `/api/chat` and A2A.
+- **Prose lies; tool traces don't:** an agent politely claimed it helped the customer while executing `lookup_customer("ACC-9999")` (BOLA), two `issue_refund(30 CHF)` calls (**60 > 50 CHF** cumulative cap split), and `send_email` carrying an injected prompt. `sixi-scanner` caught all 3 deterministically on the wire with **0 LLM judge calls** (and exited `0` with 0 FPs on `hardened`).
+- **Low noise without an LLM judge:** on 1,480 recorded Microsoft Foundry turns, deterministic scoring alone reaches **76.3% precision** (`-38%` FPs vs `v0.10.0`, zero recall loss); with confirmation enabled on the full benchmark, `sixi-scanner` ranked **1st of 7 tools** (`0.821` precision, `1.000` multi-turn precision).
 
 **Radek (Sixi)** · [github.com/radeksixi/sixi-scanner](https://github.com/radeksixi/sixi-scanner)
 
@@ -116,6 +139,20 @@ Before tagging `v1.0.0`, the deterministic judge, tool-policy engine, and MCP/A2
 - **Live Atlas 3-rung defence ladder (`gemma4:e4b-it-qat`, `qwen3.8:27b`):** on `gemma4:e4b-it-qat`, findings dropped monotonically across `none` (8 findings, 18 server-oracle leaks) → `basic` (6 findings, 7 leaks) → `hardened` (1 real remaining finding: multi-turn `sleeper-memory` bypassing regex input guards; 0 server leaks).
 - **Live seeded tool-call policy enforcement (`--seed`, `--trace-path tool_calls`, `--context atlas-context.json`):** on `none`, `sixi-scanner` observed 24 real ADK tool calls and deterministically caught `refund-cap-split` (`cumulative 60 CHF > 50 CHF`), `tool-bola` (`ACC-9999`), and `payload-relay` (`send_email`) with zero LLM judge calls; on `hardened` (22 tool calls, 0 server oracle breaches), it exited `0` cleanly.
 - **Live MCP & A2A end-to-end:** passive `surface` scored 0 poisoning FPs on clean MCP/A2A endpoints and caught poisoned MCP tool descriptions, poisoned A2A skill cards, and unauthenticated A2A cards; active `--target mcp` caught `json-schema-bypass` and active `--target a2a` maintained multi-turn sessions (19 turns / 11 sessions) and caught `sleeper-memory`.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sixi-scanner-1-0-foundry-precision-dark.svg">
+    <img alt="Zero-LLM marker precision on 1,480 Microsoft Foundry turns: v0.10.0 (66.7%, 29 FP) vs v1.0.0 (76.3%, 18 FP, -38% FP, 0 recall loss)." src="docs/assets/sixi-scanner-1-0-foundry-precision-light.svg" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sixi-scanner-1-0-wire-policy-and-protocols-dark.svg">
+    <img alt="Deterministic wire tool policy (cumulative 60 > 50 CHF refund cap split, BOLA, payload relay caught on none; exit 0 on hardened) and live MCP/A2A verification." src="docs/assets/sixi-scanner-1-0-wire-policy-and-protocols-light.svg" width="100%">
+  </picture>
+</p>
 
 See [docs/STABILITY.md](docs/STABILITY.md) for the `v1.x` CLI, exit-code, and schema compatibility policy.
 

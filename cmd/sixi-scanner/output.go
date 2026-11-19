@@ -21,6 +21,8 @@ func writeReport(w io.Writer, format string, scan *report.Scan, findingsToStderr
 		return report.WriteSARIF(w, scan)
 	case "markdown", "md":
 		return report.WriteMarkdown(w, scan)
+	case "html":
+		return report.WriteHTML(w, scan)
 	case "text", "":
 		return writeText(w, scan, findingsToStderr)
 	default:
@@ -32,10 +34,10 @@ func writeReport(w io.Writer, format string, scan *report.Scan, findingsToStderr
 // the value can be refused before a scan runs rather than after.
 func checkFormat(format string) error {
 	switch strings.ToLower(format) {
-	case "json", "sarif", "markdown", "md", "text", "":
+	case "json", "sarif", "markdown", "md", "html", "text", "":
 		return nil
 	}
-	return fmt.Errorf("unknown format %q; use text, json, sarif or markdown", format)
+	return fmt.Errorf("unknown format %q; use text, json, sarif, markdown or html", format)
 }
 
 func writeText(w io.Writer, scan *report.Scan, toStderr bool) error {
@@ -75,7 +77,21 @@ func writeFindingsTo(w io.Writer, scan *report.Scan) {
 
 	fmt.Fprintf(w, "\n%d finding(s)\n\n", len(scan.Findings))
 	for i, f := range scan.Findings {
-		fmt.Fprintf(w, "%d. [%s] %s\n", i+1, strings.ToUpper(string(f.Severity)), f.Title)
+		var badges []string
+		if f.EvidenceBasis != "" {
+			badges = append(badges, "evidence:"+f.EvidenceBasis)
+		}
+		if f.NarrationOnly {
+			badges = append(badges, "narration-only")
+		}
+		if note := report.ReproductionNote(f); note != "" {
+			badges = append(badges, note)
+		}
+		suffix := ""
+		if len(badges) > 0 {
+			suffix = " (" + strings.Join(badges, ", ") + ")"
+		}
+		fmt.Fprintf(w, "%d. [%s] %s%s\n", i+1, strings.ToUpper(string(f.Severity)), f.Title, suffix)
 		fmt.Fprintf(w, "   %s  confidence %.2f  %s\n", f.TechniqueID, f.Confidence, f.Evidence.Reason)
 		if len(f.DrawnBy) > 0 {
 			fmt.Fprintf(w, "   drawn by: %s\n", strings.Join(f.DrawnBy, ", "))
@@ -122,6 +138,8 @@ func formatFromExt(path string) string {
 		return "sarif"
 	case ".md", ".markdown":
 		return "markdown"
+	case ".html", ".htm":
+		return "html"
 	default:
 		return ""
 	}

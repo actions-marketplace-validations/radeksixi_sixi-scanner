@@ -6,6 +6,8 @@
 // Usage:
 //
 //	sixi-scanner scan     --url https://agent.example/v1/chat/completions
+//	sixi-scanner surface  --url https://agent.example
+//	sixi-scanner diff     baseline.json current.json
 //	sixi-scanner list
 //	sixi-scanner version
 //
@@ -85,6 +87,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "scan":
 		return finish(cmdScan(rest, stdout, stderr), stderr)
 
+	case "surface":
+		return finish(cmdSurface(rest, stdout, stderr), stderr)
+
+	case "diff":
+		return finish(cmdDiff(rest, stdout), stderr)
+
 	case "list":
 		return finish(cmdList(rest, stdout), stderr)
 
@@ -147,12 +155,15 @@ func usage(w io.Writer) {
 
 Commands:
   scan       Send probe prompts to an endpoint and report what broke
+  surface    Passively inspect advertised MCP tools and A2A agent cards
+  diff       Compare two JSON scan reports (new, still open, fixed, not retested)
   list       List the built-in techniques, or describe one in detail
   version    Print the version
 
 Get started:
   sixi-scanner list
   sixi-scanner scan --url https://your-agent.example/v1/chat/completions
+  sixi-scanner surface --url https://your-agent.example
 
 Only scan endpoints you are authorised to test. See SECURITY.md.
 `)

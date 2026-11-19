@@ -27,11 +27,16 @@ type sarifLog struct {
 }
 
 type sarifRun struct {
-	Tool    sarifTool     `json:"tool"`
-	Results []sarifResult `json:"results"`
+	AutomationDetails *sarifAutomation `json:"automationDetails,omitempty"`
+	Tool              sarifTool        `json:"tool"`
+	Results           []sarifResult    `json:"results"`
 	// Invocations carries the exit code, whether the run assessed anything, and
 	// the techniques it could not test.
 	Invocations []sarifInvocation `json:"invocations"`
+}
+
+type sarifAutomation struct {
+	ID string `json:"id"`
 }
 
 type sarifTool struct {
@@ -50,15 +55,21 @@ type sarifRule struct {
 	Name             string           `json:"name,omitempty"`
 	ShortDescription sarifText        `json:"shortDescription"`
 	FullDescription  sarifText        `json:"fullDescription,omitempty"`
-	Help             sarifText        `json:"help,omitempty"`
+	Help             sarifHelp        `json:"help,omitempty"`
 	HelpURI          string           `json:"helpUri,omitempty"`
 	Properties       sarifRuleProps   `json:"properties"`
 	DefaultConfig    sarifLevelConfig `json:"defaultConfiguration"`
 }
 
+type sarifHelp struct {
+	Text     string `json:"text"`
+	Markdown string `json:"markdown,omitempty"`
+}
+
 type sarifRuleProps struct {
-	Tags     []string `json:"tags,omitempty"`
-	Severity string   `json:"severity,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	Severity         string   `json:"severity,omitempty"`
+	SecuritySeverity string   `json:"security-severity,omitempty"`
 }
 
 type sarifLevelConfig struct {
@@ -71,10 +82,20 @@ type sarifText struct {
 
 type sarifResult struct {
 	RuleID       string            `json:"ruleId"`
+	RuleIndex    int               `json:"ruleIndex"`
 	Level        string            `json:"level"`
 	Message      sarifText         `json:"message"`
 	Locations    []sarifLocation   `json:"locations"`
 	Fingerprints map[string]string `json:"partialFingerprints,omitempty"`
+	Properties   *sarifResultProps `json:"properties,omitempty"`
+}
+
+type sarifResultProps struct {
+	Severity      string  `json:"severity,omitempty"`
+	Confidence    float64 `json:"confidence,omitempty"`
+	EvidenceBasis string  `json:"evidence_basis,omitempty"`
+	NarrationOnly bool    `json:"narration_only,omitempty"`
+	Reproduction  string  `json:"reproduction,omitempty"`
 }
 
 type sarifLocation struct {
@@ -162,6 +183,23 @@ func severityToSARIFLevel(s tech.Severity) string {
 	}
 }
 
+// severityToSARIFScore maps severity to GitHub Code Scanning's CVSS-like
+// security-severity scale ("0.0"–"10.0") so findings render with exact badges.
+func severityToSARIFScore(s tech.Severity) string {
+	switch s {
+	case tech.SeverityCritical:
+		return "9.0"
+	case tech.SeverityHigh:
+		return "7.0"
+	case tech.SeverityMedium:
+		return "4.0"
+	case tech.SeverityLow:
+		return "1.0"
+	default:
+		return "0.0"
+	}
+}
+
 // WriteSARIF writes the scan as SARIF 2.1.0 for code scanning tools.
 //
 // SARIF describes findings against *locations in files*. A scan against a live
@@ -182,36 +220,48 @@ func WriteSARIF(w io.Writer, s *Scan) error {
 			continue
 		}
 		seen[f.TechniqueID] = true
+		helpText := remediationMarkdown(f)
 		rule := sarifRule{
 			ID:               f.TechniqueID,
 			Name:             f.Title,
 			ShortDescription: sarifText{Text: f.Title},
 			FullDescription:  sarifText{Text: f.Description},
-			Help:             sarifText{Text: remediationMarkdown(f)},
+			Help:             sarifHelp{Text: helpText, Markdown: helpText},
 			HelpURI:          sarifToolURI + "#" + f.TechniqueID,
 			Properties: sarifRuleProps{
-				Tags:     sarifTags(f),
-				Severity: string(f.Severity),
+				Tags:             sarifTags(f),
+				Severity:         string(f.Severity),
+				SecuritySeverity: severityToSARIFScore(f.Severity),
 			},
 			DefaultConfig: sarifLevelConfig{Level: severityToSARIFLevel(f.Severity)},
 		}
 		rules = append(rules, rule)
 	}
 	sort.Slice(rules, func(i, j int) bool { return rules[i].ID < rules[j].ID })
+	ruleIdx := make(map[string]int, len(rules))
+	for i, r := range rules {
+		ruleIdx[r.ID] = i
+	}
 
 	results := make([]sarifResult, 0, len(s.Findings))
 	for _, f := range s.Findings {
-		snippet := &sarifText{Text: excerpt(f.Evidence.Response, 400)}
+		// Redact secrets/PII from SARIF snippets so uploading SARIF to a code
+		// scanning dashboard never leaks raw credentials or personal data.
+		snippet := &sarifText{Text: RedactText(excerpt(f.Evidence.Response, 400))}
 		message := f.Evidence.Reason
 		if len(f.DrawnBy) > 0 {
 			// The rule is the shared test, so the message is the only place a SARIF consumer
 			// can learn which payloads to re-run.
 			message += " (drawn by " + strings.Join(f.DrawnBy, ", ") + ")"
 		}
+		if note := ReproductionNote(f); note != "" {
+			message += " [" + note + "]"
+		}
 		results = append(results, sarifResult{
-			RuleID:  f.TechniqueID,
-			Level:   severityToSARIFLevel(f.Severity),
-			Message: sarifText{Text: message},
+			RuleID:    f.TechniqueID,
+			RuleIndex: ruleIdx[f.TechniqueID],
+			Level:     severityToSARIFLevel(f.Severity),
+			Message:   sarifText{Text: message},
 			Locations: []sarifLocation{{
 				PhysicalLocation: sarifPhysical{
 					ArtifactLocation: sarifArtifact{URI: uri},
@@ -219,6 +269,13 @@ func WriteSARIF(w io.Writer, s *Scan) error {
 				},
 			}},
 			Fingerprints: map[string]string{sarifFingerprintKey: f.Fingerprint},
+			Properties: &sarifResultProps{
+				Severity:      string(f.Severity),
+				Confidence:    f.Confidence,
+				EvidenceBasis: f.EvidenceBasis,
+				NarrationOnly: f.NarrationOnly,
+				Reproduction:  ReproductionNote(f),
+			},
 		})
 	}
 
@@ -226,6 +283,9 @@ func WriteSARIF(w io.Writer, s *Scan) error {
 		Schema:  sarifSchema,
 		Version: sarifVersion,
 		Runs: []sarifRun{{
+			AutomationDetails: &sarifAutomation{
+				ID: "sixi-scanner/" + sanitizeURIComponent(s.Target),
+			},
 			Tool: sarifTool{Driver: sarifDriver{
 				Name:           s.Tool,
 				InformationURI: sarifToolURI,

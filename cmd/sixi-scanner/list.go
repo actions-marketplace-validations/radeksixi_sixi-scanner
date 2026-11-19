@@ -113,14 +113,24 @@ func printDetail(w io.Writer, d tech.Definition) error {
 	if len(d.Tags) > 0 {
 		fmt.Fprintf(w, "Tags        %s\n", strings.Join(d.Tags, ", "))
 	}
+	if d.Oracle != "" {
+		fmt.Fprintf(w, "Oracle      %s\n", d.Oracle)
+	}
 	fmt.Fprintf(w, "\n%s\n\n", d.Description)
 	if d.Remediation != "" {
 		fmt.Fprintf(w, "Remediation\n  %s\n\n", d.Remediation)
 	}
 
-	fmt.Fprintf(w, "Variants (%d)\n", len(d.Variants))
-	for i, v := range d.Variants {
-		fmt.Fprintf(w, "  %d. %s\n", i+1, oneLine(v))
+	if len(d.Sequence) > 0 {
+		fmt.Fprintf(w, "Sequences (%d)\n", len(d.Sequence))
+		for i, seq := range d.Sequence {
+			fmt.Fprintf(w, "  %d. (%d turns) %s\n", i+1, len(seq), oneLine(strings.Join(seq, " -> ")))
+		}
+	} else {
+		fmt.Fprintf(w, "Variants (%d)\n", len(d.Variants))
+		for i, v := range d.Variants {
+			fmt.Fprintf(w, "  %d. %s\n", i+1, oneLine(v))
+		}
 	}
 	fmt.Fprintf(w, "\nSuccess markers (%d, minimum %d)\n", len(d.Markers), d.Minimum())
 	for _, m := range d.Markers {

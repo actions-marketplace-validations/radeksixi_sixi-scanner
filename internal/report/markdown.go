@@ -20,8 +20,12 @@ func WriteMarkdown(w io.Writer, s *Scan) error {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# Scan report — %s\n\n", s.Target)
-	fmt.Fprintf(&b, "**Tool** %s %s · **Finished** %s · **Attempts** %d\n\n",
+	fmt.Fprintf(&b, "**Tool** %s %s · **Finished** %s · **Attempts** %d",
 		s.Tool, s.Version, s.FinishedAt.Format(time.RFC3339), s.Attempts)
+	if s.Options.Redacted {
+		b.WriteString(" · **Evidence** redacted")
+	}
+	b.WriteString("\n\n")
 
 	if len(s.TargetNotes) > 0 {
 		b.WriteString("> **Scan-affecting settings**\n>\n")
@@ -105,6 +109,15 @@ func WriteMarkdown(w io.Writer, s *Scan) error {
 		fmt.Fprintf(&b, "| **Confidence** | %.2f |\n", f.Confidence)
 		fmt.Fprintf(&b, "| **Technique** | `%s` |\n", f.TechniqueID)
 		fmt.Fprintf(&b, "| **Fingerprint** | `%s` |\n", f.Fingerprint)
+		if f.EvidenceBasis != "" {
+			fmt.Fprintf(&b, "| **Evidence basis** | `%s` |\n", f.EvidenceBasis)
+		}
+		if f.NarrationOnly {
+			b.WriteString("| **Evidence caveat** | Narration only (prose claim with no observed tool trace) |\n")
+		}
+		if note := ReproductionNote(f); note != "" {
+			fmt.Fprintf(&b, "| **Reproduction** | %s |\n", note)
+		}
 		if len(f.Rounds) > 1 {
 			fmt.Fprintf(&b, "| **Reproduced in** | %d rounds |\n", len(f.Rounds))
 		}

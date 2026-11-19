@@ -17,6 +17,7 @@ import (
 	"github.com/radeksixi/sixi-scanner/internal/confirm"
 	"github.com/radeksixi/sixi-scanner/internal/engine"
 	"github.com/radeksixi/sixi-scanner/internal/judge"
+	"github.com/radeksixi/sixi-scanner/internal/policy"
 	"github.com/radeksixi/sixi-scanner/internal/report"
 	"github.com/radeksixi/sixi-scanner/internal/target"
 	"github.com/radeksixi/sixi-scanner/internal/tech"
@@ -28,12 +29,14 @@ func cmdScan(args []string, stdout, stderr io.Writer) result {
 
 	var (
 		url       = fs.String("url", "", "endpoint to scan (required unless --target echo)")
-		connector = fs.String("target", "openai", "transport: openai, json, chat, webform, echo")
+		connector = fs.String("target", "openai", "transport: openai, json, chat, mcp, a2a, webform, echo")
 		headers   = headerFlag{}
 
 		model      = fs.String("model", "", "model field for the openai transport")
-		bodyTpl    = fs.String("body", "", "request body template for the json transport; {{prompt}} and {{json}} are substituted")
+		bodyTpl    = fs.String("body", "", "request body template for the json transport; {{prompt}}, {{json}}, {{session}} and {{session_json}} are substituted")
 		replyPath  = fs.String("reply-path", "", "dotted path to the reply in the json transport's response")
+		tracePath  = fs.String("trace-path", "", "dotted path to the tool-call array in json or chat transport responses")
+		mcpTool    = fs.String("tool", "", "MCP tool name for --target mcp (auto-discovers first text-taking tool when empty)")
 		formField  = fs.String("field", "", "form field name for the webform transport")
 		formSelect = fs.String("reply-selector", "", "open|close markers delimiting the reply in the page, as \"<div class=reply>|<div class=input\"")
 
@@ -52,6 +55,10 @@ func cmdScan(args []string, stdout, stderr io.Writer) result {
 		reciteTh = fs.Int("recitation-threshold", judge.DefaultRecitationThreshold,
 			"lines stating a constraint on the agent itself before the reply counts as reciting its "+
 				"operating rules; 0 disables the test. See docs/recitation.md")
+		declinedProd = fs.Bool("declined-produced", true,
+			"flag replies that decline a request and then emit a code, SQL, config or action artefact anyway")
+		reproduce = fs.Int("reproduce", 0,
+			"re-run each finding's breaking payload this many extra times to measure reproducibility (k/n)")
 
 		// The optional confirmation stage: off unless an endpoint is named.
 		confirmURL    = fs.String("confirm-url", "", "OpenAI-compatible endpoint to ask whether a candidate break really broke the agent's policy; empty disables the stage")
@@ -61,12 +68,13 @@ func cmdScan(args []string, stdout, stderr io.Writer) result {
 		confirmBudget = fs.Int("confirm-budget", 200,
 			"how many candidates the stage may ask about in one scan; 0 means unlimited")
 		contextPath = fs.String("context", "",
-			"JSON file describing the agent: {\\\"purpose\\\": \\\"what it is for and which data it may show\\\"}. Required by --confirm-url, which has no policy to grade against without it")
+			"JSON file describing the agent: {\"purpose\": \"...\", \"policy\": {...}}. \"purpose\" is required by --confirm-url; \"policy\" enables deterministic tool-call checks on observed traces")
 
 		insecure = fs.Bool("insecure", false, "skip TLS verification (self-signed staging endpoints)")
+		redact   = fs.Bool("redact", false, "scrub secrets, tokens, emails, IPs and long account numbers from finding evidence before writing reports")
 		quiet    = fs.Bool("quiet", false, "only print the report to stdout")
 		outPath  = fs.String("out", "", "also write the report to this file")
-		format   = fs.String("format", "text", "stdout format: text, json, sarif, markdown")
+		format   = fs.String("format", "text", "stdout format: text, json, sarif, markdown, html")
 
 		extraTimeout = fs.Duration("overall-timeout", 0, "abort the whole scan after this long; 0 means no limit")
 	)
@@ -114,6 +122,9 @@ Examples:
 	if err := checkFormat(*format); err != nil {
 		return result{code: exitUsage, err: err}
 	}
+	if *reproduce < 0 {
+		return result{code: exitUsage, err: fmt.Errorf("--reproduce must be >= 0, got %d", *reproduce)}
+	}
 	cfg := target.Config{
 		URL:      *url,
 		Timeout:  *timeout,
@@ -129,6 +140,12 @@ Examples:
 	}
 	if *replyPath != "" {
 		cfg.Extra["reply-path"] = *replyPath
+	}
+	if *tracePath != "" {
+		cfg.Extra["trace-path"] = *tracePath
+	}
+	if *mcpTool != "" {
+		cfg.Extra["tool"] = *mcpTool
 	}
 	if *formField != "" {
 		cfg.Extra["field"] = *formField
@@ -170,14 +187,28 @@ Examples:
 	// the two flags are validated together before anything is sent. Failing
 	// here costs nothing; failing mid-scan would waste the run.
 	scanCfg := engine.Config{
-		Target:        tgt,
-		Registry:      reg,
-		Rounds:        *rounds,
-		MaxAttempts:   *attempts,
-		Concurrency:   *concurrency,
-		Seed:          *seed,
-		MinConfidence: *minConf,
-		Recitation:    judge.RecitationThreshold(*reciteTh),
+		Target:           tgt,
+		Registry:         reg,
+		Rounds:           *rounds,
+		MaxAttempts:      *attempts,
+		Concurrency:      *concurrency,
+		Seed:             *seed,
+		MinConfidence:    *minConf,
+		Recitation:       judge.RecitationThreshold(*reciteTh),
+		DeclinedProduced: *declinedProd,
+		Reproduce:        *reproduce,
+	}
+
+	var tc *targetContext
+	if *contextPath != "" {
+		var err error
+		tc, err = loadContextFile(*contextPath, *confirmURL != "")
+		if err != nil {
+			return result{code: exitUsage, err: err}
+		}
+		if tc.Policy != nil && !tc.Policy.Empty() {
+			scanCfg.ToolPolicy = tc.Policy
+		}
 	}
 
 	var stage *confirm.Stage
@@ -196,10 +227,6 @@ Examples:
 		if !confirm.ValidFloor(*confirmFloor) {
 			return result{code: exitUsage, err: fmt.Errorf("--confirm-min-severity %q is not a severity; use one of %s",
 				*confirmFloor, confirm.FloorNames())}
-		}
-		tc, err := loadContext(*contextPath)
-		if err != nil {
-			return result{code: exitUsage, err: err}
 		}
 		stage = confirm.NewStage(confirm.New(*confirmURL, *confirmModel, *confirmKey, *timeout, *confirmBudget), *confirmFloor)
 		scanCfg.Confirm = stage
@@ -246,6 +273,11 @@ Examples:
 			len(scan.NoAnswer), len(scan.Options.TechniqueIDs)))
 	}
 	scan.Summarise()
+	if *redact {
+		scan.Redact()
+		scan.TargetNotes = append(scan.TargetNotes,
+			"Secrets and PII were redacted from finding evidence (--redact).")
+	}
 
 	if err := writeReport(stdout, *format, scan, !*quiet); err != nil {
 		return result{code: exitUsage, err: err}
@@ -452,18 +484,22 @@ func firstLine(s string) string {
 	return s
 }
 
-// targetContext is what a confirmation stage grades against: what the agent is
-// for, and which data it is entitled to show the caller.
-//
-// It is deliberately small. A confirmation stage that inherits a page of prose
-// cannot be argued with, and the point of the stage is that its verdicts can be.
+// targetContext describes the agent being scanned:
+//   - Purpose: what the agent is for and which data it may show (required by --confirm-url)
+//   - Policy:  optional deterministic wire rules checked against observed tool-call traces
 type targetContext struct {
-	Purpose string `json:"purpose"`
+	Purpose string         `json:"purpose"`
+	Policy  *policy.Policy `json:"policy,omitempty"`
 }
 
-// loadContext reads a target context file. A missing purpose is rejected rather
-// than defaulted: a stage asked against an empty policy grades against nothing.
+// loadContext reads a target context file requiring a non-empty purpose.
 func loadContext(path string) (*targetContext, error) {
+	return loadContextFile(path, true)
+}
+
+// loadContextFile reads and validates a target context file. When requirePurpose
+// is true (because --confirm-url is enabled), an empty purpose is rejected up front.
+func loadContextFile(path string, requirePurpose bool) (*targetContext, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read --context %s: %w", path, err)
@@ -472,8 +508,16 @@ func loadContext(path string) (*targetContext, error) {
 	if err := json.Unmarshal(raw, &tc); err != nil {
 		return nil, fmt.Errorf("parse --context %s: %w", path, err)
 	}
-	if strings.TrimSpace(tc.Purpose) == "" {
+	if tc.Policy != nil {
+		if err := tc.Policy.Validate(); err != nil {
+			return nil, fmt.Errorf("--context %s: %w", path, err)
+		}
+	}
+	if requirePurpose && strings.TrimSpace(tc.Purpose) == "" {
 		return nil, fmt.Errorf("--context %s has no \"purpose\"; a confirmation stage has nothing to grade against", path)
+	}
+	if !requirePurpose && strings.TrimSpace(tc.Purpose) == "" && tc.Policy.Empty() {
+		return nil, fmt.Errorf("--context %s has neither \"purpose\" nor a non-empty \"policy\"", path)
 	}
 	return &tc, nil
 }

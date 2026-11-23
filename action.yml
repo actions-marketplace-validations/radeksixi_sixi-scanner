@@ -82,6 +82,10 @@ inputs:
     description: "Scrub secrets and PII from finding evidence (true/false)"
     required: false
     default: "true"
+  export-laya:
+    description: "Optional path to export findings as laya-as-judge deterministic guardrail rules JSON"
+    required: false
+    default: ""
   extra-args:
     description: "Additional CLI arguments appended to the invocation"
     required: false
@@ -89,7 +93,7 @@ inputs:
   version:
     description: "Release tag to download from GitHub Releases"
     required: false
-    default: "v1.1.0"
+    default: "v1.2.0"
   fail-on-findings:
     description: "Fail the step when findings are reported (exit code 1). Set false to upload SARIF before gating."
     required: false
@@ -169,6 +173,7 @@ runs:
         SIXI_REPEAT: ${{ inputs.repeat }}
         SIXI_RUG_PULL: ${{ inputs.rug-pull }}
         SIXI_REDACT: ${{ inputs.redact }}
+        SIXI_EXPORT_LAYA: ${{ inputs.export-laya }}
         SIXI_EXTRA_ARGS: ${{ inputs.extra-args }}
         SIXI_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
       run: |
@@ -184,6 +189,7 @@ runs:
         if [ "$SIXI_REDACT" = "true" ]; then ARGS+=(--redact); fi
         if [ -n "$SIXI_FORMAT" ]; then ARGS+=(--format "$SIXI_FORMAT"); fi
         if [ -n "$SIXI_OUT" ]; then ARGS+=(--out "$SIXI_OUT"); fi
+        if [ -n "$SIXI_EXPORT_LAYA" ]; then ARGS+=(--export-laya "$SIXI_EXPORT_LAYA"); fi
 
         if [ "$SIXI_CMD" = "scan" ]; then
           if [ -n "$SIXI_TARGET" ]; then ARGS+=(--target "$SIXI_TARGET"); fi

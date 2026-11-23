@@ -43,12 +43,23 @@ sixi-scanner version
 - `a2a` (Agent-to-Agent JSON-RPC v0.3/v0.2)
 - `json`, `chat`, `webform`, `echo`
 
-## Confirmation Stage (`laya-as-judge` & OpenAI-compatible)
+## Closed Attack → Guard → Prove Loop (`laya-as-judge v1.2.0`)
 
 ```bash
-sixi-scanner scan --url https://your-agent.example/v1/chat/completions \
+# 1. Scan & confirm with zero-output-token RedTeamVerdictJudge + export guard rules
+sixi-scanner scan --url https://your-agent.example/v1/chat/completions --stateful \
   --context agent.json \
-  --confirm-url http://127.0.0.1:8000/v1/judge
+  --confirm-url http://127.0.0.1:8000/v1/judge \
+  --out baseline.json \
+  --export-laya guard-rules.json
+
+# 2. Verify closure in laya-as-judge & load rules into server / FastMCP / LangGraph
+laya-judge verify-sixi guard-rules.json
+laya-judge serve --rules-file guard-rules.json --port 8000
+
+# 3. Re-scan and diff
+sixi-scanner scan --url https://your-agent.example/v1/chat/completions --stateful --out after.json
+sixi-scanner diff baseline.json after.json
 ```
 
 ## Source & Documentation

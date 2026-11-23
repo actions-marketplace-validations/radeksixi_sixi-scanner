@@ -130,6 +130,25 @@ func writeFile(path, format string, scan *report.Scan) error {
 	return nil
 }
 
+// writeLayaGuardPackFile writes a `laya-as-judge` regression guard pack JSON
+// file from scan findings (mode 0600 so sensitive evidence stays owner-only).
+func writeLayaGuardPackFile(path string, scan *report.Scan) error {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", path, err)
+	}
+	defer f.Close()
+	if err := report.WriteLayaGuardPack(f, scan); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
 func formatFromExt(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".json":

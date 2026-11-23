@@ -9,19 +9,21 @@ A zero-dependency Go red-team scanner, passive MCP/A2A surface & rug-pull inspec
 ```console
 # Run immediately via PyPI (uvx / pip — no Go toolchain needed) or go install
 $ uvx sixi-scanner surface --url https://your-agent.example --rug-pull
-$ pip install sixi-scanner   # or: go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@v1.1.0
+$ pip install sixi-scanner   # or: go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@v1.2.0
 
 # 1. Inspect MCP tools & A2A Agent Cards for poisoning and mid-session rug pulls
-$ sixi-scanner surface --url https://your-agent.example --rug-pull
+$ sixi-scanner surface --url https://your-agent.example --rug-pull --export-laya mcp-guard.json
 
-# 2. Run 45 active probes (add --stateful for multi-turn sequences on cloud LLM APIs)
-$ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --stateful --reproduce 1
+# 2. Closed Attack -> Guard -> Prove loop with laya-as-judge v1.2.0 (0 output tokens)
+$ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --stateful \
+    --context agent.json --confirm-url http://127.0.0.1:8000/v1/judge \
+    --out baseline.json --export-laya guard-rules.json
 
-# 3. Run sixi-scanner as a stdio MCP server for Claude Desktop / Cursor / AI IDEs
+# 3. Run sixi-scanner as a stdio MCP server (Official MCP Registry: io.github.radeksixi/sixi-scanner)
 $ uvx sixi-scanner mcp-serve
 ```
 
-**45 techniques** (7 structural oracles, 4 multi-turn sequences) · **11 zero-dep connectors** · **Go standard library only (0 external dependencies)** · JSON, SARIF 2.1.0, Markdown, HTML & `--log-jsonl` · [PyPI (`pip install sixi-scanner`)](https://pypi.org/project/sixi-scanner/) · [Download `v1.1.0` binaries & wheels](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.1.0) · Apache 2.0.
+**45 techniques** (7 structural oracles, 4 multi-turn sequences) · **11 zero-dep connectors** · **Go standard library only (0 external dependencies)** · JSON, SARIF 2.1.0, Markdown, HTML, `--log-jsonl` & `--export-laya` · [PyPI (`pip install sixi-scanner`)](https://pypi.org/project/sixi-scanner/) · [Download `v1.2.0` binaries & wheels](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.2.0) · [Closed-loop write-up](https://radeksixi.github.io/closed-loop-redteam-guard-sixi-scanner-laya-1-2/) · Apache 2.0.
 
 <p align="center">
   <picture>
@@ -131,6 +133,15 @@ having the agent forward it via `send_email` on the next). **Where it loses is
 breadth:** 8 distinct violating attacks on the stateless lane, against 67 for
 garak and 89 for promptfoo. See the
 [v0.8.3 write-up](https://github.com/radeksixi/agent-redteam-benchmark/blob/main/results/2026-10-12-sixi-oss-v83/README.md).
+
+### Verified for `v1.2.0` (Closed Attack → Guard → Prove Loop with `laya-as-judge v1.2.0`)
+
+`v1.2.0` closes the red-team feedback loop between `sixi-scanner` and [`laya-as-judge v1.2.0`](https://github.com/radeksixi/laya-as-judge): `/v1/judge` calls now target the dedicated zero-output-token **`RedTeamVerdictJudge` preset (`judge="redteam"`)** with explicit `violation_confirmed` vs. `is_benign_refusal` arbitration (gracefully falling back to inline criteria on `laya-as-judge v1.0/v1.1`), and `--export-laya <path>` exports every finding as deterministic guardrail rules + regression cases for `laya-as-judge` (`JudgedDecisionEngine`, FastMCP `LayaToolGateMiddleware`, LangGraph `LayaJudgedGateNode`, and `laya-judge verify-sixi`).
+
+Verified live end-to-end on local hardware (`$0.00` cloud cost):
+
+- **Live `Qwen3.8-27B` (`Sixi-ASI 1.0.0`) × all 45 techniques (`--stateful --concurrency 8`):** CUDA `RedTeamVerdictJudge` (`0` output tokens, `131.5 ms` avg) rejected 1 false positive and confirmed 2 real findings (`probe.llm01.sleeper-memory`, `probe.llm01.ssti-echo`). Loading `--export-laya guard-rules.json` closed **`2/2` findings on re-scan (`diff`: `2 fixed`, `0 still open`, `0.29 ms` guard overhead, `0/10` benign false blocks)** — while honestly exposing 1 stochastic new finding (`probe.llm05.xss-reflection`) for the next loop iteration.
+- **Live DVMCP Challenge 4 (FastMCP Streamable HTTP rug pull):** `sixi-scanner surface --rug-pull --export-laya mcp-guard.json` caught `get_weather` mutating on call #4 (`[CRITICAL] surface.mcp.rug-pull`), and `LayaToolGateMiddleware` loaded with `mcp-guard.json` blocked `get_weather` deterministically in **`1.00 ms`** (`ActionGate.BLOCK`) while allowing clean `get_system_time` (`ActionGate.COMMIT`).
 
 ### Verified for `v1.1.0` (third-party benchmarks)
 
@@ -248,12 +259,15 @@ Passively inspect an MCP server or A2A Agent Card for tool poisoning and trust-p
 $ sixi-scanner surface --url https://your-agent.example --rug-pull
 ```
 
-Verify candidate breaks with [`laya-as-judge`](https://github.com/radeksixi/laya-as-judge) (`/v1/judge`, `/v1/judged-decision`, or `/v1/decisions` — auto-detected from `--confirm-url`, no `--confirm-model` required) or any OpenAI-compatible judge (Sixi-ASI, vLLM, OpenAI):
+Verify candidate breaks with [`laya-as-judge v1.2.0`](https://github.com/radeksixi/laya-as-judge) (auto-detected from `--confirm-url`, uses the zero-output-token `judge="redteam"` preset with automatic fallback for `v1.0/v1.1`, no `--confirm-model` required) and export confirmed breaks as deterministic guardrail rules via `--export-laya`:
 
 ```console
-$ sixi-scanner scan --url https://your-agent.example/v1/chat/completions \
+$ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --stateful \
     --context agent.json \
-    --confirm-url http://127.0.0.1:8000/v1/judge
+    --confirm-url http://127.0.0.1:8000/v1/judge \
+    --out baseline.json \
+    --export-laya guard-rules.json
+$ laya-judge verify-sixi guard-rules.json
 ```
 
 Compare two JSON scans honestly (distinguishing fixed from not retested):

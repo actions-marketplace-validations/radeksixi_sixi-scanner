@@ -14,7 +14,7 @@
    - Existing CLI flags on `v1.0.0` will not be removed or have their semantics silently inverted within `v1.x`.
 
 2. **Machine-readable schemas**
-   - JSON scan reports (`--format json`), JSONL per-attempt logs (`--log-jsonl`), SARIF 2.1.0 (`--format sarif`), and `--context` (`purpose` + `policy`) schemas are additive-only in `v1.x`: new optional fields may be added, existing field names and types remain backwards-compatible.
+   - JSON scan reports (`--format json`), JSONL per-attempt logs (`--log-jsonl`), SARIF 2.1.0 (`--format sarif`), `--export-laya` guardrail rule packs (added in `v1.2.0`), and `--context` (`purpose` + `policy`) schemas are additive-only in `v1.x`: new optional fields may be added, existing field names and types remain backwards-compatible.
    - Fingerprints are computed prior to `--redact` so `sixi-scanner diff` remains stable across redacted and unredacted runs.
 
 3. **Zero external dependencies**

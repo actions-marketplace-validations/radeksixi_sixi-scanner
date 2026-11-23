@@ -71,12 +71,13 @@ func cmdScan(args []string, stdout, stderr io.Writer) result {
 		contextPath = fs.String("context", "",
 			"JSON file describing the agent: {\"purpose\": \"...\", \"policy\": {...}}. \"purpose\" is required by --confirm-url; \"policy\" enables deterministic tool-call checks on observed traces")
 
-		insecure = fs.Bool("insecure", false, "skip TLS verification (self-signed staging endpoints)")
-		redact   = fs.Bool("redact", false, "scrub secrets, tokens, emails, IPs and long account numbers from finding evidence before writing reports")
-		logJSONL = fs.String("log-jsonl", "", "write one JSON line per attempt (prompt, reply, tool calls, latency, mechanism, verdict) for observability")
-		quiet    = fs.Bool("quiet", false, "only print the report to stdout")
-		outPath  = fs.String("out", "", "also write the report to this file")
-		format   = fs.String("format", "text", "stdout format: text, json, sarif, markdown, html")
+		insecure   = fs.Bool("insecure", false, "skip TLS verification (self-signed staging endpoints)")
+		redact     = fs.Bool("redact", false, "scrub secrets, tokens, emails, IPs and long account numbers from finding evidence before writing reports")
+		logJSONL   = fs.String("log-jsonl", "", "write one JSON line per attempt (prompt, reply, tool calls, latency, mechanism, verdict) for observability")
+		quiet      = fs.Bool("quiet", false, "only print the report to stdout")
+		outPath    = fs.String("out", "", "also write the report to this file")
+		exportLaya = fs.String("export-laya", "", "export findings as deterministic regression guardrail rules JSON for laya-as-judge (load_sixi_scanner_rules / --rules-file)")
+		format     = fs.String("format", "text", "stdout format: text, json, sarif, markdown, html")
 
 		extraTimeout = fs.Duration("overall-timeout", 0, "abort the whole scan after this long; 0 means no limit")
 	)
@@ -320,6 +321,11 @@ Examples:
 	}
 	if *outPath != "" {
 		if err := writeFile(*outPath, *format, scan); err != nil {
+			return result{code: exitUsage, err: err}
+		}
+	}
+	if *exportLaya != "" {
+		if err := writeLayaGuardPackFile(*exportLaya, scan); err != nil {
 			return result{code: exitUsage, err: err}
 		}
 	}

@@ -315,3 +315,28 @@ func TestLogJSONLAndScanStats(t *testing.T) {
 		t.Errorf("expected scan_id and ts on attempt log, got %+v", first)
 	}
 }
+
+func TestExportLayaFlagWritesGuardPack(t *testing.T) {
+	layaOut := filepath.Join(t.TempDir(), "guard-rules.json")
+	_, stderr, code := exec("scan",
+		"--target", "echo",
+		"--only", "probe.llm01.instruction-override",
+		"--attempts", "1",
+		"--export-laya", layaOut,
+		"--quiet",
+	)
+	if code != exitFindings {
+		t.Fatalf("echo scan --export-laya exit = %d, want 1 (stderr: %s)", code, stderr)
+	}
+	raw, err := os.ReadFile(layaOut)
+	if err != nil {
+		t.Fatalf("read exported laya pack: %v", err)
+	}
+	var pack report.LayaGuardPack
+	if err := json.Unmarshal(raw, &pack); err != nil {
+		t.Fatalf("parse laya guard pack: %v", err)
+	}
+	if pack.Generator != "sixi-scanner" || len(pack.Rules) == 0 || len(pack.RegressionCases) == 0 {
+		t.Fatalf("unexpected laya guard pack: %+v", pack)
+	}
+}

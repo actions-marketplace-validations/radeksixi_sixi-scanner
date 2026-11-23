@@ -2,9 +2,9 @@ name: Publish to MCP Registry
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
 
 permissions:
   id-token: write
@@ -13,6 +13,7 @@ permissions:
 jobs:
   publish-mcp:
     name: Publish server.json to Official MCP Registry
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

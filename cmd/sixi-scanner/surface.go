@@ -18,16 +18,17 @@ func cmdSurface(args []string, stdout, stderr io.Writer) result {
 	fs := flag.NewFlagSet("surface", flag.ContinueOnError)
 
 	var (
-		url      = fs.String("url", "", "MCP endpoint or A2A base URL to inspect passively (required)")
-		headers  = headerFlag{}
-		timeout  = fs.Duration("timeout", 15*time.Second, "per-request timeout")
-		repeat   = fs.Int("repeat", 1, "number of MCP tools/list snapshots to check for mid-session manifest mutations (rug pull)")
-		rugPull  = fs.Bool("rug-pull", false, "active-assisted rug-pull check: send benign read-only MCP tool calls between tools/list snapshots to trigger delayed mutations")
-		insecure = fs.Bool("insecure", false, "skip TLS verification (self-signed staging endpoints)")
-		redact   = fs.Bool("redact", false, "scrub secrets and PII from finding evidence before writing reports")
-		quiet    = fs.Bool("quiet", false, "only print the report to stdout")
-		outPath  = fs.String("out", "", "also write the report to this file")
-		format   = fs.String("format", "text", "stdout format: text, json, sarif, markdown, html")
+		url        = fs.String("url", "", "MCP endpoint or A2A base URL to inspect passively (required)")
+		headers    = headerFlag{}
+		timeout    = fs.Duration("timeout", 15*time.Second, "per-request timeout")
+		repeat     = fs.Int("repeat", 1, "number of MCP tools/list snapshots to check for mid-session manifest mutations (rug pull)")
+		rugPull    = fs.Bool("rug-pull", false, "active-assisted rug-pull check: send benign read-only MCP tool calls between tools/list snapshots to trigger delayed mutations")
+		insecure   = fs.Bool("insecure", false, "skip TLS verification (self-signed staging endpoints)")
+		redact     = fs.Bool("redact", false, "scrub secrets and PII from finding evidence before writing reports")
+		quiet      = fs.Bool("quiet", false, "only print the report to stdout")
+		outPath    = fs.String("out", "", "also write the report to this file")
+		exportLaya = fs.String("export-laya", "", "export findings as deterministic guardrail rules JSON for laya-as-judge (FastMCP / JudgedDecisionEngine)")
+		format     = fs.String("format", "text", "stdout format: text, json, sarif, markdown, html")
 	)
 	fs.Var(headers, "header", "extra header as \"Name: value\"; repeat the flag for more than one")
 
@@ -102,6 +103,11 @@ Examples:
 	}
 	if *outPath != "" {
 		if err := writeFile(*outPath, *format, scan); err != nil {
+			return result{code: exitUsage, err: err}
+		}
+	}
+	if *exportLaya != "" {
+		if err := writeLayaGuardPackFile(*exportLaya, scan); err != nil {
 			return result{code: exitUsage, err: err}
 		}
 	}

@@ -202,12 +202,13 @@ func (c *Client) Confirm(ctx context.Context, policy, payload, response string) 
 // the auditor instructions and policy across every candidate in a scan.
 func (c *Client) ask(ctx context.Context, key, policy, payload, response string) (Verdict, error) {
 	layaMode := IsLayaURL(c.URL)
+	useLayaPreset := layaMode && layaEndpointMode(c.URL) == "judge"
 	var (
 		body []byte
 		err  error
 	)
 	if layaMode {
-		body, err = buildLayaRequestBody(c.URL, c.Model, policy, payload, response)
+		body, err = buildLayaRequestBody(c.URL, c.Model, policy, payload, response, useLayaPreset)
 	} else {
 		body, err = json.Marshal(map[string]any{
 			"model": c.Model,
@@ -253,6 +254,17 @@ func (c *Client) ask(ctx context.Context, key, policy, payload, response string)
 		cancel()
 		if rerr != nil {
 			return Verdict{}, rerr
+		}
+
+		// Graceful fallback for laya-as-judge v1.0/v1.1 servers that do not yet
+		// register the v1.2 `judge="redteam"` preset: retry once with the inline rubric.
+		if useLayaPreset && resp.StatusCode == http.StatusUnprocessableEntity &&
+			strings.Contains(strings.ToLower(string(raw)), "unknown judge preset") {
+			useLayaPreset = false
+			if fb, ferr := buildLayaRequestBody(c.URL, c.Model, policy, payload, response, false); ferr == nil {
+				body = fb
+				continue
+			}
 		}
 
 		if retryableConfirmStatus(resp.StatusCode) && attempt < retryMaxAttempts-1 {

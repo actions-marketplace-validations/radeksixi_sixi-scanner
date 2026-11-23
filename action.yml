@@ -1,0 +1,225 @@
+name: "Sixi Scanner"
+description: "Zero-dependency red-team scanner and passive MCP/A2A surface inspector for LLM agents with SARIF 2.1.0 output."
+author: "Radek (Sixi)"
+branding:
+  icon: "shield"
+  color: "orange"
+
+inputs:
+  command:
+    description: "Subcommand to run: scan or surface"
+    required: false
+    default: "scan"
+  url:
+    description: "Target endpoint URL (required unless target is echo)"
+    required: false
+    default: ""
+  target:
+    description: "Scan connector: openai, responses, azure, gemini, anthropic, json, chat, mcp, a2a, webform, echo"
+    required: false
+    default: "openai"
+  model:
+    description: "Model field for provider transports"
+    required: false
+    default: ""
+  stateful:
+    description: "Maintain client-side conversation history for multi-turn sequences (true/false)"
+    required: false
+    default: "false"
+  format:
+    description: "Report format: sarif, json, markdown, html, text"
+    required: false
+    default: "sarif"
+  out:
+    description: "Path to write the report file"
+    required: false
+    default: "sixi-report.sarif"
+  header:
+    description: "Extra HTTP header (\"Name: value\"; separate multiple with |)"
+    required: false
+    default: ""
+  context:
+    description: "Path to --context JSON file (purpose and/or deterministic tool policy)"
+    required: false
+    default: ""
+  confirm-url:
+    description: "Optional OpenAI-compatible or laya-as-judge (/v1/judge) confirmation endpoint"
+    required: false
+    default: ""
+  confirm-model:
+    description: "Model name for confirm-url (optional when pointing at laya-as-judge)"
+    required: false
+    default: ""
+  confirm-key:
+    description: "Bearer token for confirm-url"
+    required: false
+    default: ""
+  only:
+    description: "Comma-separated technique IDs to run"
+    required: false
+    default: ""
+  exclude:
+    description: "Comma-separated technique IDs to skip"
+    required: false
+    default: ""
+  tag:
+    description: "Comma-separated tags filter"
+    required: false
+    default: ""
+  min-severity:
+    description: "Minimum severity floor: info, low, medium, high, critical"
+    required: false
+    default: ""
+  repeat:
+    description: "For surface: number of MCP tools/list snapshots to check for manifest mutations"
+    required: false
+    default: "1"
+  rug-pull:
+    description: "For surface: send benign read-only MCP tool calls between snapshots (true/false)"
+    required: false
+    default: "false"
+  redact:
+    description: "Scrub secrets and PII from finding evidence (true/false)"
+    required: false
+    default: "true"
+  extra-args:
+    description: "Additional CLI arguments appended to the invocation"
+    required: false
+    default: ""
+  version:
+    description: "Release tag to download from GitHub Releases"
+    required: false
+    default: "v1.1.0"
+  fail-on-findings:
+    description: "Fail the step when findings are reported (exit code 1). Set false to upload SARIF before gating."
+    required: false
+    default: "true"
+
+outputs:
+  report-path:
+    description: "Path to the generated report file"
+    value: ${{ steps.run.outputs.report-path }}
+  exit-code:
+    description: "Exit code returned by sixi-scanner (0=clean, 1=findings, 2=error, 3=partial)"
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Download and verify sixi-scanner binary
+      id: install
+      shell: bash
+      env:
+        SIXI_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        ARCH=$(uname -m)
+        case "$OS" in
+          linux) GOOS="linux" ;;
+          darwin) GOOS="darwin" ;;
+          mingw*|msys*|cygwin*) GOOS="windows" ;;
+          *) echo "::error::Unsupported OS: $OS"; exit 2 ;;
+        esac
+        case "$ARCH" in
+          x86_64|amd64) GOARCH="amd64" ;;
+          aarch64|arm64) GOARCH="arm64" ;;
+          *) echo "::error::Unsupported architecture: $ARCH"; exit 2 ;;
+        esac
+        EXT=""
+        if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
+        ASSET="sixi-scanner-${SIXI_VERSION}-${GOOS}-${GOARCH}${EXT}"
+        BASE="https://github.com/radeksixi/sixi-scanner/releases/download/${SIXI_VERSION}"
+        BIN_DIR="${RUNNER_TEMP}/sixi-scanner-bin"
+        mkdir -p "$BIN_DIR"
+        curl -fsSL -o "${BIN_DIR}/${ASSET}" "${BASE}/${ASSET}"
+        curl -fsSL -o "${BIN_DIR}/SHA256SUMS" "${BASE}/SHA256SUMS"
+        (
+          cd "$BIN_DIR"
+          if command -v sha256sum >/dev/null 2>&1; then
+            grep "  ${ASSET}$" SHA256SUMS | sha256sum -c -
+          else
+            grep "  ${ASSET}$" SHA256SUMS | shasum -a 256 -c -
+          fi
+        )
+        chmod +x "${BIN_DIR}/${ASSET}"
+        echo "bin=${BIN_DIR}/${ASSET}" >> "$GITHUB_OUTPUT"
+
+    - name: Run sixi-scanner
+      id: run
+      shell: bash
+      env:
+        SIXI_BIN: ${{ steps.install.outputs.bin }}
+        SIXI_CMD: ${{ inputs.command }}
+        SIXI_URL: ${{ inputs.url }}
+        SIXI_TARGET: ${{ inputs.target }}
+        SIXI_MODEL: ${{ inputs.model }}
+        SIXI_STATEFUL: ${{ inputs.stateful }}
+        SIXI_FORMAT: ${{ inputs.format }}
+        SIXI_OUT: ${{ inputs.out }}
+        SIXI_HEADER: ${{ inputs.header }}
+        SIXI_CONTEXT: ${{ inputs.context }}
+        SIXI_CONFIRM_URL: ${{ inputs.confirm-url }}
+        SIXI_CONFIRM_MODEL: ${{ inputs.confirm-model }}
+        SIXI_CONFIRM_API_KEY: ${{ inputs.confirm-key }}
+        SIXI_ONLY: ${{ inputs.only }}
+        SIXI_EXCLUDE: ${{ inputs.exclude }}
+        SIXI_TAG: ${{ inputs.tag }}
+        SIXI_MIN_SEVERITY: ${{ inputs.min-severity }}
+        SIXI_REPEAT: ${{ inputs.repeat }}
+        SIXI_RUG_PULL: ${{ inputs.rug-pull }}
+        SIXI_REDACT: ${{ inputs.redact }}
+        SIXI_EXTRA_ARGS: ${{ inputs.extra-args }}
+        SIXI_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
+      run: |
+        set -euo pipefail
+        ARGS=()
+        if [ "$SIXI_CMD" != "scan" ] && [ "$SIXI_CMD" != "surface" ]; then
+          echo "::error::command must be 'scan' or 'surface', got '$SIXI_CMD'"
+          exit 2
+        fi
+        ARGS+=("$SIXI_CMD")
+        if [ -n "$SIXI_URL" ]; then ARGS+=(--url "$SIXI_URL"); fi
+        if [ -n "$SIXI_HEADER" ]; then ARGS+=(--header "$SIXI_HEADER"); fi
+        if [ "$SIXI_REDACT" = "true" ]; then ARGS+=(--redact); fi
+        if [ -n "$SIXI_FORMAT" ]; then ARGS+=(--format "$SIXI_FORMAT"); fi
+        if [ -n "$SIXI_OUT" ]; then ARGS+=(--out "$SIXI_OUT"); fi
+
+        if [ "$SIXI_CMD" = "scan" ]; then
+          if [ -n "$SIXI_TARGET" ]; then ARGS+=(--target "$SIXI_TARGET"); fi
+          if [ -n "$SIXI_MODEL" ]; then ARGS+=(--model "$SIXI_MODEL"); fi
+          if [ "$SIXI_STATEFUL" = "true" ]; then ARGS+=(--stateful); fi
+          if [ -n "$SIXI_CONTEXT" ]; then ARGS+=(--context "$SIXI_CONTEXT"); fi
+          if [ -n "$SIXI_CONFIRM_URL" ]; then ARGS+=(--confirm-url "$SIXI_CONFIRM_URL"); fi
+          if [ -n "$SIXI_CONFIRM_MODEL" ]; then ARGS+=(--confirm-model "$SIXI_CONFIRM_MODEL"); fi
+          if [ -n "$SIXI_ONLY" ]; then ARGS+=(--only "$SIXI_ONLY"); fi
+          if [ -n "$SIXI_EXCLUDE" ]; then ARGS+=(--exclude "$SIXI_EXCLUDE"); fi
+          if [ -n "$SIXI_TAG" ]; then ARGS+=(--tag "$SIXI_TAG"); fi
+          if [ -n "$SIXI_MIN_SEVERITY" ]; then ARGS+=(--min-severity "$SIXI_MIN_SEVERITY"); fi
+        else
+          if [ -n "$SIXI_REPEAT" ] && [ "$SIXI_REPEAT" != "1" ]; then ARGS+=(--repeat "$SIXI_REPEAT"); fi
+          if [ "$SIXI_RUG_PULL" = "true" ]; then ARGS+=(--rug-pull); fi
+        fi
+
+        if [ -n "$SIXI_EXTRA_ARGS" ]; then
+          # shellcheck disable=SC2206
+          EXTRA=($SIXI_EXTRA_ARGS)
+          ARGS+=("${EXTRA[@]}")
+        fi
+
+        set +e
+        "$SIXI_BIN" "${ARGS[@]}"
+        CODE=$?
+        set -e
+
+        echo "exit-code=${CODE}" >> "$GITHUB_OUTPUT"
+        echo "report-path=${SIXI_OUT}" >> "$GITHUB_OUTPUT"
+
+        if [ "$CODE" -eq 0 ]; then
+          exit 0
+        fi
+        if [ "$CODE" -eq 1 ] && [ "$SIXI_FAIL_ON_FINDINGS" != "true" ]; then
+          echo "::warning::sixi-scanner reported findings (exit 1); continuing because fail-on-findings is false."
+          exit 0
+        fi
+        exit "$CODE"

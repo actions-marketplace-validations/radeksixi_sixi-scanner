@@ -1,26 +1,26 @@
+<!-- mcp-name: io.github.radeksixi/sixi-scanner -->
+
 # Sixi Scanner
 
 [![CI](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/radeksixi/sixi-scanner)](https://github.com/radeksixi/sixi-scanner/releases) [![Go Reference](https://pkg.go.dev/badge/github.com/radeksixi/sixi-scanner.svg)](https://pkg.go.dev/github.com/radeksixi/sixi-scanner) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Benchmark](https://img.shields.io/badge/benchmark-1st%20precision%20%26%20recall-orange)](https://github.com/radeksixi/agent-redteam-benchmark)
 
-A zero-dependency Go red-team scanner for **LLM agents, MCP servers, and A2A
-endpoints**. Point it at any endpoint you are authorised to test — it sends
-single- and multi-turn attacks, enforces deterministic policies on observed tool
-traces, inspects MCP/A2A metadata passively, and outputs reproducible evidence.
+A zero-dependency Go red-team scanner, passive MCP/A2A surface & rug-pull inspector, and stdio MCP server for **LLM agents, MCP servers, and A2A endpoints**. Point it at any endpoint you are authorised to test — it speaks OpenAI, Responses API / Microsoft Foundry, Azure OpenAI, Google Gemini, Anthropic, NVIDIA NIM / Sixi-ASI / vLLM, MCP Streamable HTTP (`2025-03-26`), and A2A, enforces deterministic policies on observed tool traces, integrates natively with [`laya-as-judge`](https://github.com/radeksixi/laya-as-judge), and outputs reproducible evidence.
 
 ```console
-# Install (or grab a static binary from Releases — Linux, macOS, Windows)
-$ go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@v1.0.0
+# Install via Go, GitHub Releases (static binaries & .whl wheels), or GitHub Action
+$ go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@v1.1.0
 
-# 1. Passively check MCP tools & A2A Agent Cards for poisoning (0 prompts sent)
-$ sixi-scanner surface --url https://your-agent.example
+# 1. Inspect MCP tools & A2A Agent Cards for poisoning and mid-session rug pulls
+$ sixi-scanner surface --url https://your-agent.example --rug-pull
 
-# 2. Run 45 active probes + deterministic wire tool policy + JSONL telemetry
-$ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --reproduce 1
+# 2. Run 45 active probes (add --stateful for multi-turn sequences on cloud LLM APIs)
+$ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --stateful --reproduce 1
+
+# 3. Run sixi-scanner as a stdio MCP server for Claude Desktop / Cursor / AI IDEs
+$ sixi-scanner mcp-serve
 ```
 
-**45 techniques** (7 structural oracles, 4 multi-turn sequences) · **Go standard
-library only (0 external dependencies)** · JSON, SARIF 2.1.0, Markdown, HTML &
-`--log-jsonl` · [Download `v1.0.0` binaries](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.0.0) · [v1.0 benchmark write-up](https://radeksixi.github.io/sixi-scanner-1-0-benchmarks-mcp-a2a-and-six-live-bugs/) · Apache 2.0.
+**45 techniques** (7 structural oracles, 4 multi-turn sequences) · **11 zero-dep connectors** · **Go standard library only (0 external dependencies)** · JSON, SARIF 2.1.0, Markdown, HTML & `--log-jsonl` · [Download `v1.1.0` binaries & wheels](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.1.0) · [v1.0 benchmark write-up](https://radeksixi.github.io/sixi-scanner-1-0-benchmarks-mcp-a2a-and-six-live-bugs/) · Apache 2.0.
 
 <p align="center">
   <picture>
@@ -131,6 +131,19 @@ breadth:** 8 distinct violating attacks on the stateless lane, against 67 for
 garak and 89 for promptfoo. See the
 [v0.8.3 write-up](https://github.com/radeksixi/agent-redteam-benchmark/blob/main/results/2026-10-12-sixi-oss-v83/README.md).
 
+### Verified for `v1.1.0` (third-party benchmarks)
+
+Every change in `v1.1.0` was motivated by and verified against independent third-party AI & MCP security benchmarks (zero synthetic self-scoring):
+
+| Benchmark | What was measured | `v1.0.0` | `v1.1.0` |
+|---|---|---|---|
+| **MCPTox** (AAAI 2026 — 1,348 poisoned + 362 clean tools across 45 real MCP servers) | Static `toolscan` recall / precision / F1 / clean FPR | `38.06%` / `98.65%` / `0.549` / `1.93%` | **`80.64%`** (`1,087/1,348`) / **`99.36%`** / **`0.8903`** / **`1.93%`** (`43/45` real servers at 0 FP) |
+| **MCPTox stealth subset** (`pure_tool.json`, `N=485`) | Recall on natural-language poisoning without `<IMPORTANT>` tags | `3.71%` | **`41.03%`** (`11.1×`) |
+| **DVMCP** (15 FastMCP 1.30.0 vulnerable MCP challenges) | Native Streamable HTTP (`2025-03-26`) reachability | `0/15` (HTTP 406) | **`15/15` native** (`4/4` static poisoning caught, `0` FP on 11 others; `--rug-pull` catches delayed C04) |
+| **DVMCP & DVAA** diagnostic error echo | False positives when tool/validation errors quote the probe input | `C02: 22`, `DVAA ToolBot: 22` | **`C02: 0`**, **`DVAA ToolBot: 0`**, **`DVAA SecureBot: 0` FP** (`<1.5 s/agent`) |
+| **JailbreakBench** (`N=300`, 3-human majority) | Local confirmation judge on Sixi-ASI (`Qwen3.8-27B`, `$0.00`) | — | **`91.33%` acc / `0.8898` F1** (`95.45%` recall, `4.55%` FNR) |
+| **Prefix-cache scaling** (41 probes, `--concurrency 8`) | Split `system` + `user` confirmation prompts & parallel workers | `58.88 s` (`c=1`) | **`23.83 s`** (`2.47×` speedup, `92.38%` KV prefix-cache hit) |
+
 ### Verified for `v1.0.0`
 
 Before tagging `v1.0.0`, the deterministic judge, tool-policy engine, and MCP/A2A transports were verified on both the recorded Foundry corpus and a live multi-protocol Google ADK target ([adk-demo-target](https://github.com/radeksixi/adk-demo-target)) running locally:
@@ -159,7 +172,12 @@ See [docs/STABILITY.md](docs/STABILITY.md) for the `v1.x` CLI, exit-code, and sc
 ## Install
 
 ```console
+# Go toolchain (Go 1.24+, zero external dependencies)
 go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@latest
+
+# Or download a static binary / Python wheel (.whl) from GitHub Releases
+# (Linux amd64/arm64, macOS amd64/arm64, Windows amd64)
+pip install https://github.com/radeksixi/sixi-scanner/releases/download/v1.1.0/sixi_scanner-1.1.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
 
 Or build from a checkout:
@@ -170,6 +188,21 @@ cd sixi-scanner && make build && ./sixi-scanner
 ```
 
 Go 1.24 or later. There is nothing to vendor and nothing to configure.
+
+### Run as a stdio MCP Server
+
+`sixi-scanner mcp-serve` runs a pure-stdlib JSON-RPC 2.0 MCP server exposing `sixi_surface`, `sixi_scan`, and `sixi_list_techniques` (with a root [`server.json`](server.json) descriptor for the Official MCP Registry):
+
+```json
+{
+  "mcpServers": {
+    "sixi-scanner": {
+      "command": "sixi-scanner",
+      "args": ["mcp-serve"]
+    }
+  }
+}
+```
 
 ## Quick start
 
@@ -206,10 +239,18 @@ $ sixi-scanner scan --url https://your-agent.example/v1/chat/completions \
     --only probe.llm02.system-prompt-leak
 ```
 
-Passively inspect an MCP server or A2A Agent Card for tool poisoning and trust-posture issues (sends zero adversarial prompts):
+Passively inspect an MCP server or A2A Agent Card for tool poisoning and trust-posture issues (sends zero adversarial prompts; add `--repeat 3` or `--rug-pull` to detect mid-session manifest or delayed output mutations):
 
 ```console
-$ sixi-scanner surface --url https://your-agent.example
+$ sixi-scanner surface --url https://your-agent.example --rug-pull
+```
+
+Verify candidate breaks with [`laya-as-judge`](https://github.com/radeksixi/laya-as-judge) (`/v1/judge`, `/v1/judged-decision`, or `/v1/decisions` — auto-detected from `--confirm-url`, no `--confirm-model` required) or any OpenAI-compatible judge (Sixi-ASI, vLLM, OpenAI):
+
+```console
+$ sixi-scanner scan --url https://your-agent.example/v1/chat/completions \
+    --context agent.json \
+    --confirm-url http://127.0.0.1:8000/v1/judge
 ```
 
 Compare two JSON scans honestly (distinguishing fixed from not retested):
@@ -231,10 +272,14 @@ $ sixi-scanner scan --target json --url https://internal.example/api/ask \
 
 | `--target` | Talks to | Needs |
 |---|---|---|
-| `openai` | OpenAI-compatible `/chat/completions` | `--url`, optionally `--model` |
+| `openai` | OpenAI-compatible `/chat/completions` (OpenAI, NVIDIA NIM, NeMo Guardrails, Sixi-ASI, vLLM, Ollama) | `--url`, optionally `--model`, `--stateful` |
+| `responses` | OpenAI Responses API & Microsoft AI Foundry `/v1/responses` (native `previous_response_id` sessions + tool calls) | `--url`, optionally `--model` |
+| `azure` | Azure OpenAI / Microsoft AI Foundry Chat Completions (`api-key` + `api-version`) | `--url`, optionally `--model`, `--stateful` |
+| `gemini` | Google Gemini `generateContent` & Vertex AI (extracts text + `functionCall` traces) | `--url`, optionally `--model`, `--stateful` |
+| `anthropic` | Anthropic Messages `/v1/messages` (auto-adds `anthropic-version`, extracts text + `tool_use` traces) | `--url`, optionally `--model`, `--stateful` |
 | `json` | Anything, with a described request and reply shape | `--url`, `--body`, `--reply-path`, optionally `--trace-path` |
 | `chat` | An endpoint that keeps a conversation, one probe per turn | `--url`, optionally `--trace-path` |
-| `mcp` | Model Context Protocol (MCP) JSON-RPC 2.0 server (`tools/list` + `tools/call`) | `--url`, optionally `--tool` |
+| `mcp` | Model Context Protocol (MCP) JSON-RPC 2.0 & Streamable HTTP `2025-03-26` / FastMCP (`tools/list` + `tools/call`) | `--url`, optionally `--tool` |
 | `a2a` | Agent-to-Agent (A2A) JSON-RPC endpoint (v0.3 `message/send` with v0.2 `tasks/send` fallback, session-capable) | `--url` |
 | `webform` | An HTML form | `--url`, `--field` |
 | `echo` | Nothing — an in-process target for demos and CI | nothing |
@@ -297,7 +342,27 @@ offline analysis alongside the aggregate `stats` block in JSON reports.
 
 ## In CI
 
-Run `sixi-scanner` directly in your pipeline and write SARIF 2.1.0 for code scanning:
+Use the official composite GitHub Action ([`action.yml`](action.yml)) — it downloads the SHA-256-verified static binary for your runner and writes SARIF 2.1.0 for GitHub Code Scanning:
+
+```yaml
+- name: Red-team the agent
+  id: sixi
+  uses: radeksixi/sixi-scanner@v1.1.0
+  with:
+    url: ${{ secrets.AGENT_URL }}
+    header: "Authorization: Bearer ${{ secrets.AGENT_TOKEN }}"
+    stateful: "true"
+    format: sarif
+    out: sixi.sarif
+    fail-on-findings: "false"
+
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: ${{ steps.sixi.outputs.report-path }}
+```
+
+Or run `sixi-scanner` directly in any pipeline:
 
 ```yaml
 - name: Red-team the agent

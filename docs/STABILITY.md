@@ -5,7 +5,7 @@
 ## What is stable across `v1.x`
 
 1. **CLI subcommands & exit codes**
-   - Subcommands: `scan`, `surface`, `diff`, `list`, `version`.
+   - Subcommands: `scan`, `surface`, `diff`, `list`, `mcp-serve` (added in `v1.1.0`), `version`.
    - Exit codes:
      - `0` — ran and found nothing (for `diff`: no new findings)
      - `1` — ran and reported findings (for `diff`: one or more new findings)

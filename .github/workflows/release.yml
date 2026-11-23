@@ -25,7 +25,11 @@ jobs:
           go vet ./...
           go test -race -count=1 ./...
 
-      - name: Cross-compile static binaries
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cross-compile static binaries & build PyPI wheels
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -46,8 +50,18 @@ jobs:
               go build -trimpath -ldflags "-s -w -X main.version=${TAG}" \
               -o "$OUT" ./cmd/sixi-scanner
           done
-          (cd dist && sha256sum sixi-scanner-* > SHA256SUMS)
+          python3 packaging/pypi/build_wheels.py \
+            --version "$TAG" \
+            --dist-dir dist \
+            --out-dir dist/wheels
+          (cd dist && sha256sum sixi-scanner-* wheels/*.whl > SHA256SUMS)
           cat dist/SHA256SUMS
+
+      - name: Upload wheel artifacts for optional PyPI publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-wheels
+          path: dist/wheels/*.whl
 
       - name: Upload release assets
         env:
@@ -55,9 +69,28 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/sixi-scanner-* dist/SHA256SUMS --clobber
+            gh release upload "$TAG" dist/sixi-scanner-* dist/wheels/*.whl dist/SHA256SUMS --clobber
           else
-            gh release create "$TAG" dist/sixi-scanner-* dist/SHA256SUMS \
+            gh release create "$TAG" dist/sixi-scanner-* dist/wheels/*.whl dist/SHA256SUMS \
               --title "sixi-scanner ${TAG}" \
               --generate-notes
           fi
+
+  publish-pypi:
+    name: Publish wheels to PyPI (when PYPI_PUBLISH=true)
+    needs: release
+    if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-wheels
+          path: dist/wheels
+
+      - name: Publish distribution wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/wheels

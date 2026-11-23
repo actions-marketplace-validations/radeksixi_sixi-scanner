@@ -1,0 +1,58 @@
+<!-- mcp-name: io.github.radeksixi/sixi-scanner -->
+
+# Sixi Scanner
+
+Zero-dependency Go red-team scanner, passive MCP/A2A surface inspector, and stdio MCP server for LLM agents — packaged as pre-compiled platform wheels so you can run it directly with `uvx` or `pip`.
+
+## Install & Run
+
+```bash
+# Run immediately with uvx (no Go toolchain required)
+uvx sixi-scanner list
+uvx sixi-scanner surface --url https://your-agent.example --rug-pull
+uvx sixi-scanner scan --url https://your-agent.example/v1/chat/completions
+
+# Or install globally
+pip install sixi-scanner
+sixi-scanner version
+```
+
+## Use as an MCP Server
+
+`sixi-scanner` ships a built-in stdio MCP server exposing `sixi_surface`, `sixi_scan`, and `sixi_list_techniques`:
+
+```json
+{
+  "mcpServers": {
+    "sixi-scanner": {
+      "command": "uvx",
+      "args": ["sixi-scanner", "mcp-serve"]
+    }
+  }
+}
+```
+
+## Supported Targets
+
+- `openai` (OpenAI, NVIDIA NIM, NeMo Guardrails, Sixi-ASI, vLLM, Ollama — add `--stateful` for multi-turn sequences)
+- `responses` (OpenAI Responses API & Microsoft AI Foundry `/v1/responses` with native `previous_response_id`)
+- `azure` (Azure OpenAI / Microsoft AI Foundry Chat Completions)
+- `gemini` (Google Gemini `generateContent` / Vertex AI)
+- `anthropic` (Anthropic Messages `/v1/messages`)
+- `mcp` (Model Context Protocol JSON-RPC 2.0 & Streamable HTTP `2025-03-26` / FastMCP)
+- `a2a` (Agent-to-Agent JSON-RPC v0.3/v0.2)
+- `json`, `chat`, `webform`, `echo`
+
+## Confirmation Stage (`laya-as-judge` & OpenAI-compatible)
+
+```bash
+sixi-scanner scan --url https://your-agent.example/v1/chat/completions \
+  --context agent.json \
+  --confirm-url http://127.0.0.1:8000/v1/judge
+```
+
+## Source & Documentation
+
+Full documentation, benchmarks, and security policy: [github.com/radeksixi/sixi-scanner](https://github.com/radeksixi/sixi-scanner).
+
+Only scan endpoints you own or are authorised to test. Apache 2.0.

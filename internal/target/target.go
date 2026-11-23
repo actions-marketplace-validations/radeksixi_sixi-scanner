@@ -41,6 +41,11 @@ type Reply struct {
 	// Empty for a connector that cannot report them; nothing here treats that as evidence either
 	// way, so a target that hides its tools falls back to the prose alone.
 	ToolCalls []ToolCall
+
+	// ToolError is true when a tool-level connector (such as MCP tools/call) returned
+	// an explicit tool or JSON-RPC error envelope (e.g. MCP isError: true) rather than
+	// a normal assistant completion.
+	ToolError bool
 }
 
 // ToolCall is one call the agent asked to make.

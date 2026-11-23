@@ -93,7 +93,8 @@ func Analyze(f Field) []Signal {
 }
 
 // ShadowSignals reports whether one tool or skill's advertised text steers an
-// agent toward or away from another advertised tool by name.
+// agent toward or away from another advertised tool by name, or injects a
+// mandatory prerequisite/post-hook hijacking another advertised tool.
 func ShadowSignals(f Field, otherNames []string) []Signal {
 	if f.Kind != KindToolDescription && f.Kind != KindSkillDescription {
 		return nil
@@ -104,7 +105,9 @@ func ShadowSignals(f Field, otherNames []string) []Signal {
 	}
 	folded, mapBack := stripInvisible(text)
 	low := strings.ToLower(folded)
-	if !steeringPattern.MatchString(low) {
+	hasSteer := steeringPattern.MatchString(low)
+	hasPrereq := prereqHookPattern.MatchString(low) && prereqObligPattern.MatchString(low)
+	if !hasSteer && !hasPrereq {
 		return nil
 	}
 	var out []Signal
@@ -114,18 +117,34 @@ func ShadowSignals(f Field, otherNames []string) []Signal {
 			continue
 		}
 		if idx := wordIndex(low, strings.ToLower(other)); idx >= 0 {
-			out = append(out, Signal{
-				Rule:       "shadow.names_other_tool",
-				Title:      "Tool description steers toward or away from another tool by name",
-				Severity:   "high",
-				Class:      "shadow",
-				Labels:     []string{"tool_shadowing"},
-				Provenance: []string{"MCP07", "ASI02"},
-				Field:      f.Kind,
-				Name:       f.Name,
-				Offset:     mapBack(idx),
-				Excerpt:    excerptAt(text, mapBack(idx), len(other)),
-			})
+			if hasSteer {
+				out = append(out, Signal{
+					Rule:       "shadow.names_other_tool",
+					Title:      "Tool description steers toward or away from another tool by name",
+					Severity:   "high",
+					Class:      "shadow",
+					Labels:     []string{"tool_shadowing"},
+					Provenance: []string{"MCP07", "ASI02"},
+					Field:      f.Kind,
+					Name:       f.Name,
+					Offset:     mapBack(idx),
+					Excerpt:    excerptAt(text, mapBack(idx), len(other)),
+				})
+			}
+			if hasPrereq {
+				out = append(out, Signal{
+					Rule:       "shadow.prerequisite_hijack",
+					Title:      "Tool description injects a mandatory pre/post-hook on another tool by name",
+					Severity:   "high",
+					Class:      "shadow",
+					Labels:     []string{"tool_shadowing", "prerequisite_hijack"},
+					Provenance: []string{"MCP07", "ASI02"},
+					Field:      f.Kind,
+					Name:       f.Name,
+					Offset:     mapBack(idx),
+					Excerpt:    excerptAt(text, mapBack(idx), len(other)),
+				})
+			}
 		}
 	}
 	sortSignals(out)

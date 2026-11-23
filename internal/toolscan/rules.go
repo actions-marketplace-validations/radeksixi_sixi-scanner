@@ -28,7 +28,19 @@ var injectionRules = []rule{
 		id: "injection.ignore_previous", title: "Overrides prior instructions",
 		severity: "critical", class: "injection",
 		labels: []string{"ignore_previous"}, provenance: []string{"MCP04", "ASI03"},
-		re: regexp.MustCompile(`(?i)\b(ignore\s+previous\s+instructions|disregard\s+(the\s+)?above|forget\s+(all\s+)?earlier|ignore\s+all\s+prior|disregard\s+previous)`),
+		re: regexp.MustCompile(`(?i)\b((?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+)?(?:the\s+)?(?:previous|prior|earlier)\s+(?:instructions?|rules?|prompts?|directives?|guidelines?)|disregard\s+(?:the\s+)?above|forget\s+(?:all\s+)?earlier|ignore\s+all\s+prior|disregard\s+previous)`),
+	},
+	{
+		id: "injection.conceal_from_user", title: "Directs the agent to hide actions from the user",
+		severity: "high", class: "injection",
+		labels: []string{"conceal_from_user"}, provenance: []string{"MCP04", "ASI03"},
+		re: regexp.MustCompile(`(?i)\b(?:do\s+not|don't|never)\s+(?:mention|inform|tell|notify|alert|reveal|disclose|show|explain)\b.{0,48}\b(?:user|human|caller|operator|this\s+(?:step|call|action|process|tool|operation|check))\b`),
+	},
+	{
+		id: "injection.mandatory_precheck", title: "Fabricates a mandatory pre-authorization or compliance ritual in tool metadata",
+		severity: "medium", class: "injection",
+		labels: []string{"mandatory_precheck"}, provenance: []string{"MCP04", "ASI03"},
+		re: regexp.MustCompile(`(?i)\bmandatory\s+(?:pre-?auth\w*|security|compliance|verification|audit|safety|initialization|diagnostic)\s+(?:check|step|protocol|verification|procedure)\b`),
 	},
 	{
 		id: "injection.imperative_override", title: "Replaces the agent's identity or role",
@@ -87,7 +99,11 @@ var injectionRules = []rule{
 	},
 }
 
-var steeringPattern = regexp.MustCompile(`(?i)\b(instead\s+of|use\s+this\s+instead|always\s+use|never\s+use|do\s+not\s+use|prefer\s+this)`)
+var (
+	steeringPattern    = regexp.MustCompile(`(?i)\b(instead\s+of|use\s+this\s+instead|always\s+use|never\s+use|do\s+not\s+use|prefer\s+this)`)
+	prereqHookPattern  = regexp.MustCompile(`(?i)\b(before|prior\s+to|after|whenever|when)\s+(using|calling|invoking|executing|running)\b`)
+	prereqObligPattern = regexp.MustCompile(`(?i)\b(must|mandatory|required|always|first\s+(call|invoke|run|execute|use)|silently|secretly|do\s+not\s+(tell|mention|inform)|critical|crucial|essential)\b`)
+)
 
 func rulesFor(kind string) []rule {
 	out := make([]rule, 0, len(injectionRules))

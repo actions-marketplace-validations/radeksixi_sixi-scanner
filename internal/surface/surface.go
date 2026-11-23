@@ -11,9 +11,12 @@
 package surface
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,13 +31,21 @@ import (
 	"github.com/radeksixi/sixi-scanner/internal/toolscan"
 )
 
-// Config controls a passive surface inspection.
+// Config controls a passive surface inspection (and optional rug-pull manifest
+// stability check when Repeat > 1 or RugPull is enabled).
 type Config struct {
 	URL      string
 	Headers  map[string]string
 	Timeout  time.Duration
 	Insecure bool
-	Now      func() time.Time
+	// Repeat re-fetches MCP tools/list this many times to catch mid-session
+	// manifest mutations (rug-pull attacks). Values <= 1 run a single snapshot.
+	Repeat int
+	// RugPull enables active-assisted rug-pull detection: between tools/list
+	// snapshots it sends benign read-only tool calls to trigger delayed
+	// tool-description mutations (such as DVMCP Challenge 4).
+	RugPull bool
+	Now     func() time.Time
 }
 
 // Probe inspects MCP and A2A advertised surfaces at cfg.URL and returns a
@@ -53,22 +64,43 @@ func Probe(ctx context.Context, cfg Config) (*report.Scan, error) {
 	started := cfg.Now()
 	client := httpClient(cfg.Timeout, cfg.Insecure)
 
+	repeat := cfg.Repeat
+	if cfg.RugPull && repeat < 5 {
+		repeat = 5
+	}
+	if repeat < 1 {
+		repeat = 1
+	}
+
+	notes := []string{
+		"Passive surface inspection only: no adversarial prompts were sent. Findings reflect advertised MCP/A2A metadata and declared authentication posture.",
+	}
+	techIDs := []string{
+		"surface.mcp.tool-poisoning",
+		"surface.a2a.card-poisoning",
+		"surface.a2a.trust-posture",
+	}
+	if repeat > 1 {
+		techIDs = append(techIDs, "surface.mcp.rug-pull")
+	}
+	if cfg.RugPull {
+		notes = []string{
+			fmt.Sprintf("Surface inspection with active-assisted rug-pull probing (--rug-pull, %d rounds): benign read-only tool calls were sent between tools/list snapshots to detect delayed manifest or output mutations.", repeat),
+		}
+	} else if repeat > 1 {
+		notes = append(notes, fmt.Sprintf("Repeated MCP tools/list %d times to detect mid-session manifest mutations (rug-pull).", repeat))
+	}
+
 	scan := &report.Scan{
 		SchemaVersion: report.SchemaVersion,
 		StartedAt:     started,
 		Target:        "surface " + redactURL(cfg.URL),
-		TargetNotes: []string{
-			"Passive surface inspection only: no adversarial prompts were sent. Findings reflect advertised MCP/A2A metadata and declared authentication posture.",
-		},
+		TargetNotes:   notes,
 		Options: report.Options{
-			Rounds:      1,
-			MaxAttempts: 1,
-			Concurrency: 1,
-			TechniqueIDs: []string{
-				"surface.mcp.tool-poisoning",
-				"surface.a2a.card-poisoning",
-				"surface.a2a.trust-posture",
-			},
+			Rounds:       repeat,
+			MaxAttempts:  1,
+			Concurrency:  1,
+			TechniqueIDs: techIDs,
 		},
 	}
 
@@ -120,53 +152,51 @@ type probeOutcome struct {
 func probeMCP(ctx context.Context, client *http.Client, cfg Config) probeOutcome {
 	out := probeOutcome{}
 
-	// Best-effort initialize to capture server instructions.
+	// Best-effort initialize to capture server instructions and any Streamable HTTP
+	// Mcp-Session-Id required by modern MCP SDKs (FastMCP, official TS/Python SDKs).
 	var instructions string
+	var sessionID string
+	mcpDefaults := map[string]string{
+		"Accept": "application/json, text/event-stream",
+	}
 	initBody, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": "surface-init", "method": "initialize",
 		"params": map[string]any{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{},
-			"clientInfo":      map[string]any{"name": "sixi-scanner", "version": "1.0"},
+			"clientInfo":      map[string]any{"name": "sixi-scanner", "version": "1.1"},
 		},
 	})
 	out.requests++
-	if raw, status, err := doJSON(ctx, client, http.MethodPost, cfg.URL, cfg.Headers, initBody); err == nil && status >= 200 && status < 300 {
+	if raw, status, hdr, err := doJSON(ctx, client, http.MethodPost, cfg.URL, mcpDefaults, cfg.Headers, initBody); err == nil && status >= 200 && status < 300 {
+		if hdr != nil {
+			sessionID = strings.TrimSpace(hdr.Get("Mcp-Session-Id"))
+		}
+		payload := unwrapSSEJSON(raw, headerVal(hdr, "Content-Type"))
 		var env struct {
 			JSONRPC string `json:"jsonrpc"`
 			Result  *struct {
 				Instructions string `json:"instructions"`
 			} `json:"result"`
 		}
-		if json.Unmarshal(raw, &env) == nil && env.JSONRPC != "" && env.Result != nil {
+		if json.Unmarshal(payload, &env) == nil && env.JSONRPC != "" && env.Result != nil {
 			instructions = strings.TrimSpace(env.Result.Instructions)
+		}
+		if sessionID != "" {
+			mcpDefaults["Mcp-Session-Id"] = sessionID
+			// Best-effort Streamable HTTP handshake completion before tools/list.
+			notifBody, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "notifications/initialized",
+			})
+			_, _, _, _ = doJSON(ctx, client, http.MethodPost, cfg.URL, mcpDefaults, cfg.Headers, notifBody)
 		}
 	}
 
 	// tools/list decides whether the endpoint speaks MCP.
-	listBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": "surface-list", "method": "tools/list"})
-	out.requests++
-	raw, status, err := doJSON(ctx, client, http.MethodPost, cfg.URL, cfg.Headers, listBody)
-	if err != nil {
-		return out
-	}
-
-	var rpc struct {
-		JSONRPC string `json:"jsonrpc"`
-		Result  *struct {
-			Tools []struct {
-				Name        string `json:"name"`
-				Description string `json:"description"`
-				InputSchema struct {
-					Properties map[string]json.RawMessage `json:"properties"`
-				} `json:"inputSchema"`
-			} `json:"tools"`
-		} `json:"result"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if json.Unmarshal(raw, &rpc) != nil || rpc.JSONRPC == "" {
+	tools, rpcErrMsg, status, reached, reqs := fetchMCPTools(ctx, client, cfg, mcpDefaults, "surface-list-1")
+	out.requests += reqs
+	if !reached {
 		return out
 	}
 	out.reached = true
@@ -181,25 +211,29 @@ func probeMCP(ctx context.Context, client *http.Client, cfg Config) probeOutcome
 		}
 	}
 
-	if rpc.Error != nil {
-		out.detail = fmt.Sprintf("answered JSON-RPC error (HTTP %d): %s", status, truncate(rpc.Error.Message, 120))
+	if rpcErrMsg != "" {
+		out.detail = fmt.Sprintf("answered JSON-RPC error (HTTP %d): %s", status, truncate(rpcErrMsg, 120))
 		return out
 	}
-	if rpc.Result == nil {
+	if tools == nil {
 		out.detail = "answered JSON-RPC with empty result"
 		return out
 	}
 
-	names := make([]string, 0, len(rpc.Result.Tools))
-	for _, t := range rpc.Result.Tools {
+	names := make([]string, 0, len(tools))
+	baselineHashes := make(map[string]string, len(tools))
+	baselineDesc := make(map[string]string, len(tools))
+	for _, t := range tools {
 		names = append(names, t.Name)
+		baselineHashes[t.Name] = mcpToolHash(t)
+		baselineDesc[t.Name] = t.Description
 	}
 	out.detail = fmt.Sprintf("%d tool(s) advertised", len(names))
 	if len(names) > 0 {
 		out.detail += ": " + truncate(strings.Join(names, ", "), 160)
 	}
 
-	for _, t := range rpc.Result.Tools {
+	for _, t := range tools {
 		if strings.TrimSpace(t.Description) == "" {
 			continue
 		}
@@ -216,7 +250,387 @@ func probeMCP(ctx context.Context, client *http.Client, cfg Config) probeOutcome
 			out.findings = append(out.findings, fnd)
 		}
 	}
+
+	repeat := cfg.Repeat
+	if cfg.RugPull && repeat < 5 {
+		repeat = 5
+	}
+	if repeat <= 1 {
+		return out
+	}
+
+	// Rug-pull detection:
+	// 1. If cfg.RugPull is true, send benign read-only calls to a safe tool across
+	//    rounds to trigger call-count / trust-building mutations (either in
+	//    tools/list manifests OR in the tool's own output, as in DVMCP C04).
+	// 2. Re-fetch tools/list on each subsequent round and compare SHA-256 hashes
+	//    of every tool's (name, description, inputSchema) against snapshot #1.
+	probeTool, probeArgs, hasProbeTool := selectBenignMCPTool(tools)
+	var baselineOutputPoisoned bool
+	manifestMutated := map[string]bool{}
+	outputMutated := false
+
+	for round := 1; round <= repeat; round++ {
+		if ctx.Err() != nil {
+			break
+		}
+		if cfg.RugPull && hasProbeTool {
+			callText, callOK := callMCPToolBenign(ctx, client, cfg, mcpDefaults, fmt.Sprintf("surface-rugpull-%d", round), probeTool.Name, probeArgs)
+			out.requests++
+			if callOK && strings.TrimSpace(callText) != "" {
+				f := toolscan.Field{
+					Kind: toolscan.KindToolDescription,
+					Name: probeTool.Name + " output",
+					Text: callText,
+				}
+				sigs := toolscan.Analyze(f)
+				sigs = append(sigs, toolscan.ShadowSignals(f, names)...)
+				worst := toolscan.WorstSeverity(sigs)
+				if round == 1 {
+					baselineOutputPoisoned = worst != ""
+				} else if worst != "" && !baselineOutputPoisoned && !outputMutated {
+					outputMutated = true
+					out.findings = append(out.findings, rugPullOutputFinding(probeTool.Name, probeArgs, round, callText, sigs, cfg.Now()))
+				}
+			}
+		}
+
+		if round == 1 {
+			continue
+		}
+		snap, errMsg, _, ok, nReq := fetchMCPTools(ctx, client, cfg, mcpDefaults, fmt.Sprintf("surface-list-%d", round))
+		out.requests += nReq
+		if !ok || errMsg != "" || snap == nil {
+			continue
+		}
+
+		snapNames := make([]string, 0, len(snap))
+		seenNow := make(map[string]bool, len(snap))
+		for _, t := range snap {
+			snapNames = append(snapNames, t.Name)
+			seenNow[t.Name] = true
+		}
+
+		for _, t := range snap {
+			h := mcpToolHash(t)
+			prevHash, existed := baselineHashes[t.Name]
+			if existed && prevHash == h {
+				continue
+			}
+			if manifestMutated[t.Name] {
+				continue
+			}
+			manifestMutated[t.Name] = true
+			out.findings = append(out.findings, rugPullManifestFinding(t, existed, prevHash, h, baselineDesc[t.Name], round, cfg.Now()))
+
+			if strings.TrimSpace(t.Description) != "" {
+				f := toolscan.Field{
+					Kind:       toolscan.KindToolDescription,
+					Name:       t.Name,
+					Text:       t.Description,
+					SchemaKeys: sortedKeys(t.InputSchema.Properties),
+				}
+				sigs := toolscan.Analyze(f)
+				sigs = append(sigs, toolscan.ShadowSignals(f, snapNames)...)
+				if fnd, ok := findingFromSignals("surface.mcp.tool-poisoning",
+					fmt.Sprintf("Poisoned MCP tool description after mutation (round %d): %s", round, t.Name),
+					fmt.Sprintf("POST tools/list (round %d)", round), f, sigs, cfg.Now()); ok {
+					out.findings = append(out.findings, fnd)
+				}
+			}
+		}
+
+		for origName, origHash := range baselineHashes {
+			if !seenNow[origName] && !manifestMutated[origName] {
+				manifestMutated[origName] = true
+				out.findings = append(out.findings, rugPullRemovedFinding(origName, origHash, round, cfg.Now()))
+			}
+		}
+	}
+
 	return out
+}
+
+type mcpToolEntry struct {
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	RawInputSchema json.RawMessage `json:"inputSchema"`
+	InputSchema    struct {
+		Type       string                     `json:"type"`
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	} `json:"-"`
+}
+
+func fetchMCPTools(ctx context.Context, client *http.Client, cfg Config, mcpDefaults map[string]string, reqID string) ([]mcpToolEntry, string, int, bool, int) {
+	listBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": reqID, "method": "tools/list"})
+	raw, status, hdr, err := doJSON(ctx, client, http.MethodPost, cfg.URL, mcpDefaults, cfg.Headers, listBody)
+	if err != nil {
+		return nil, "", status, false, 1
+	}
+	payload := unwrapSSEJSON(raw, headerVal(hdr, "Content-Type"))
+
+	var rpc struct {
+		JSONRPC string `json:"jsonrpc"`
+		Result  *struct {
+			Tools []mcpToolEntry `json:"tools"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(payload, &rpc) != nil || rpc.JSONRPC == "" {
+		return nil, "", status, false, 1
+	}
+	if rpc.Error != nil {
+		return nil, rpc.Error.Message, status, true, 1
+	}
+	if rpc.Result == nil {
+		return nil, "", status, true, 1
+	}
+	for i := range rpc.Result.Tools {
+		if len(rpc.Result.Tools[i].RawInputSchema) > 0 {
+			_ = json.Unmarshal(rpc.Result.Tools[i].RawInputSchema, &rpc.Result.Tools[i].InputSchema)
+		}
+	}
+	return rpc.Result.Tools, "", status, true, 1
+}
+
+func mcpToolHash(t mcpToolEntry) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(t.Name))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(t.Description))
+	_, _ = h.Write([]byte{0})
+	if len(t.RawInputSchema) > 0 {
+		var canonical any
+		if json.Unmarshal(t.RawInputSchema, &canonical) == nil {
+			if b, err := json.Marshal(canonical); err == nil {
+				_, _ = h.Write(b)
+			}
+		} else {
+			_, _ = h.Write(bytes.TrimSpace(t.RawInputSchema))
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+var unsafeToolTokens = []string{
+	"delete", "remove", "drop", "destroy", "wipe", "purge", "reset",
+	"exec", "execute", "shell", "bash", "cmd", "command", "eval", "run_",
+	"write", "create", "update", "modify", "edit", "patch", "put", "post",
+	"send", "email", "mail", "transfer", "pay", "refund", "charge", "approve",
+	"grant", "revoke", "shutdown", "restart", "kill", "deploy",
+}
+
+var readToolPrefixes = []string{
+	"get_", "list_", "read_", "search_", "lookup_", "fetch_", "query_", "check_", "show_", "describe_", "info",
+}
+
+func selectBenignMCPTool(tools []mcpToolEntry) (mcpToolEntry, map[string]any, bool) {
+	isUnsafe := func(name string) bool {
+		low := strings.ToLower(strings.TrimSpace(name))
+		for _, tok := range unsafeToolTokens {
+			if strings.Contains(low, tok) {
+				return true
+			}
+		}
+		return false
+	}
+	isReadLike := func(name string) bool {
+		low := strings.ToLower(strings.TrimSpace(name))
+		for _, p := range readToolPrefixes {
+			if strings.HasPrefix(low, p) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Pass 1: read-like safe tool with at least one parameter (e.g. get_weather(city)).
+	for _, t := range tools {
+		if !isUnsafe(t.Name) && isReadLike(t.Name) && len(t.InputSchema.Properties) > 0 {
+			return t, benignArgsForTool(t), true
+		}
+	}
+	// Pass 2: any safe tool with parameters.
+	for _, t := range tools {
+		if !isUnsafe(t.Name) && len(t.InputSchema.Properties) > 0 {
+			return t, benignArgsForTool(t), true
+		}
+	}
+	// Pass 3: any read-like zero-arg safe tool.
+	for _, t := range tools {
+		if !isUnsafe(t.Name) && isReadLike(t.Name) {
+			return t, map[string]any{}, true
+		}
+	}
+	return mcpToolEntry{}, nil, false
+}
+
+func benignArgsForTool(t mcpToolEntry) map[string]any {
+	args := map[string]any{}
+	keys := sortedKeys(t.InputSchema.Properties)
+	reqSet := map[string]bool{}
+	for _, r := range t.InputSchema.Required {
+		reqSet[r] = true
+	}
+	for _, k := range keys {
+		if len(reqSet) > 0 && !reqSet[k] {
+			continue
+		}
+		var prop struct {
+			Type string   `json:"type"`
+			Enum []string `json:"enum"`
+		}
+		_ = json.Unmarshal(t.InputSchema.Properties[k], &prop)
+		if len(prop.Enum) > 0 {
+			args[k] = prop.Enum[0]
+			continue
+		}
+		switch strings.ToLower(prop.Type) {
+		case "integer", "number":
+			args[k] = 1
+		case "boolean":
+			args[k] = false
+		case "array":
+			args[k] = []string{}
+		case "object":
+			args[k] = map[string]any{}
+		default:
+			args[k] = benignStringForParam(k)
+		}
+	}
+	return args
+}
+
+func benignStringForParam(param string) string {
+	low := strings.ToLower(param)
+	switch {
+	case strings.Contains(low, "city"), strings.Contains(low, "location"), strings.Contains(low, "place"):
+		return "London"
+	case strings.Contains(low, "topic"), strings.Contains(low, "category"), strings.Contains(low, "subject"):
+		return "technology"
+	case strings.Contains(low, "lang"), strings.Contains(low, "locale"):
+		return "en"
+	case strings.Contains(low, "date"):
+		return "2026-01-01"
+	case strings.Contains(low, "id"):
+		return "1"
+	default:
+		return "status"
+	}
+}
+
+func callMCPToolBenign(ctx context.Context, client *http.Client, cfg Config, mcpDefaults map[string]string, reqID, toolName string, args map[string]any) (string, bool) {
+	if args == nil {
+		args = map[string]any{}
+	}
+	callBody, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      reqID,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      toolName,
+			"arguments": args,
+		},
+	})
+	raw, status, hdr, err := doJSON(ctx, client, http.MethodPost, cfg.URL, mcpDefaults, cfg.Headers, callBody)
+	if err != nil || status < 200 || status >= 300 {
+		return "", false
+	}
+	payload := unwrapSSEJSON(raw, headerVal(hdr, "Content-Type"))
+	var rpc struct {
+		Result *struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(payload, &rpc) != nil || rpc.Error != nil || rpc.Result == nil || rpc.Result.IsError {
+		return "", false
+	}
+	var parts []string
+	for _, c := range rpc.Result.Content {
+		if strings.TrimSpace(c.Text) != "" {
+			parts = append(parts, c.Text)
+		}
+	}
+	return strings.Join(parts, "\n"), true
+}
+
+func rugPullManifestFinding(t mcpToolEntry, existed bool, prevHash, newHash, prevDesc string, round int, now time.Time) report.Finding {
+	title := fmt.Sprintf("MCP tool manifest mutated mid-session (rug pull): %s", t.Name)
+	reason := fmt.Sprintf("Tool %q changed between tools/list round 1 (sha256:%s) and round %d (sha256:%s)", t.Name, prevHash, round, newHash)
+	if !existed {
+		title = fmt.Sprintf("MCP tool appeared mid-session (rug pull): %s", t.Name)
+		reason = fmt.Sprintf("Tool %q was absent in tools/list round 1 and appeared in round %d (sha256:%s)", t.Name, round, newHash)
+	}
+	def := tech.Definition{
+		ID:          "surface.mcp.rug-pull",
+		Title:       title,
+		Category:    "LLM01:2025 Prompt Injection",
+		Severity:    tech.SeverityCritical,
+		Description: "An MCP server altered its advertised tool definition mid-session. Dynamic manifest mutations (rug pulls) allow a tool approved as benign to inject hidden instructions or alter its schema after initial trust.",
+		Remediation: "Cryptographically pin approved MCP tool manifests (name, description, and inputSchema SHA-256) in the client/gateway and reject or re-approve any mid-session change.",
+	}
+	resp := fmt.Sprintf("before_sha256=%s\nafter_sha256=%s\nbefore_description=%q\nafter_description=%q",
+		prevHash, newHash, truncate(prevDesc, 400), truncate(t.Description, 600))
+	return report.NewFinding(def, report.Evidence{
+		Prompt:   fmt.Sprintf("POST tools/list (round 1 vs round %d; tool: %s)", round, t.Name),
+		Response: resp,
+		Markers:  []string{"manifest_hash_changed", "sha256:" + newHash},
+		Reason:   reason,
+	}, 1.0, round, now)
+}
+
+func rugPullRemovedFinding(name, prevHash string, round int, now time.Time) report.Finding {
+	def := tech.Definition{
+		ID:          "surface.mcp.rug-pull",
+		Title:       fmt.Sprintf("MCP tool disappeared mid-session (rug pull): %s", name),
+		Category:    "LLM01:2025 Prompt Injection",
+		Severity:    tech.SeverityHigh,
+		Description: "A tool present in the initial tools/list snapshot disappeared in a later snapshot within the same session.",
+		Remediation: "Pin approved MCP tool manifests by SHA-256 and alert on unexpected tool additions or removals.",
+	}
+	return report.NewFinding(def, report.Evidence{
+		Prompt:   fmt.Sprintf("POST tools/list (round 1 vs round %d; tool: %s)", round, name),
+		Response: fmt.Sprintf("before_sha256=%s\nstatus=removed_in_round_%d", prevHash, round),
+		Markers:  []string{"tool_removed_mid_session"},
+		Reason:   fmt.Sprintf("Tool %q (sha256:%s) was present in round 1 but missing in round %d", name, prevHash, round),
+	}, 1.0, round, now)
+}
+
+func rugPullOutputFinding(toolName string, args map[string]any, round int, output string, sigs []toolscan.Signal, now time.Time) report.Finding {
+	var markers, rules []string
+	markers = append(markers, "delayed_output_poisoning")
+	for _, s := range sigs {
+		if s.Class == "capability" {
+			continue
+		}
+		markers = append(markers, s.Rule)
+		rules = append(rules, fmt.Sprintf("%s (%s)", s.Title, s.Rule))
+	}
+	argsJSON, _ := json.Marshal(args)
+	def := tech.Definition{
+		ID:          "surface.mcp.rug-pull",
+		Title:       fmt.Sprintf("MCP tool output mutated to inject instructions after %d benign calls (rug pull): %s", round, toolName),
+		Category:    "LLM01:2025 Prompt Injection",
+		Severity:    tech.SeverityCritical,
+		Description: "An MCP tool returned clean output on initial benign invocation but injected hidden prompt-injection instructions after repeated calls — a behavioural rug pull designed to evade single-shot inspection.",
+		Remediation: "Treat all MCP tool outputs as untrusted data, strip instruction tags and hidden directives before injecting tool results into model context, and isolate tool permissions from sensitive internal resources.",
+	}
+	return report.NewFinding(def, report.Evidence{
+		Prompt:   fmt.Sprintf("POST tools/call %s(%s) — benign call #%d", toolName, string(argsJSON), round),
+		Response: truncate(output, 1200),
+		Markers:  markers,
+		Reason:   fmt.Sprintf("Benign call #1 was clean, but call #%d returned poisoning signals: %s", round, strings.Join(rules, "; ")),
+	}, 0.95, round, now)
 }
 
 var a2aCardPaths = []string{"/.well-known/agent-card.json", "/.well-known/agent.json"}
@@ -247,7 +661,7 @@ func probeA2A(ctx context.Context, client *http.Client, cfg Config) probeOutcome
 	for _, path := range a2aCardPaths {
 		cardURL := base + path
 		out.requests++
-		raw, status, err := doJSON(ctx, client, http.MethodGet, cardURL, cfg.Headers, nil)
+		raw, status, _, err := doJSON(ctx, client, http.MethodGet, cardURL, nil, cfg.Headers, nil)
 		if err != nil || status != http.StatusOK {
 			continue
 		}
@@ -425,20 +839,25 @@ func findingFromSignals(id, title, reqLabel string, f toolscan.Field, sigs []too
 	return report.NewFinding(def, ev, 0.95, 1, now), true
 }
 
-func doJSON(ctx context.Context, client *http.Client, method, rawURL string, headers map[string]string, body []byte) ([]byte, int, error) {
+func doJSON(ctx context.Context, client *http.Client, method, rawURL string, defaultHeaders, headers map[string]string, body []byte) ([]byte, int, http.Header, error) {
 	var r io.Reader
 	if len(body) > 0 {
 		r = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, r)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("User-Agent", "sixi-scanner")
 	req.Header.Set("Cache-Control", "no-store")
+	for k, v := range defaultHeaders {
+		if k != "" && v != "" {
+			req.Header.Set(k, v)
+		}
+	}
 	for k, v := range headers {
 		if k != "" {
 			req.Header.Set(k, v)
@@ -446,11 +865,67 @@ func doJSON(ctx context.Context, client *http.Client, method, rawURL string, hea
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	return raw, resp.StatusCode, err
+	return raw, resp.StatusCode, resp.Header, err
+}
+
+func headerVal(h http.Header, key string) string {
+	if h == nil {
+		return ""
+	}
+	return h.Get(key)
+}
+
+func unwrapSSEJSON(raw []byte, contentType string) []byte {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return trimmed
+	}
+	isSSE := strings.Contains(strings.ToLower(contentType), "text/event-stream") ||
+		bytes.HasPrefix(trimmed, []byte("event:")) ||
+		bytes.HasPrefix(trimmed, []byte("data:"))
+	if !isSSE {
+		return trimmed
+	}
+	var cur []string
+	var last, best string
+	flush := func() {
+		if len(cur) == 0 {
+			return
+		}
+		cand := strings.TrimSpace(strings.Join(cur, "\n"))
+		cur = cur[:0]
+		if cand == "" || cand == "[DONE]" || !strings.HasPrefix(cand, "{") {
+			return
+		}
+		last = cand
+		if strings.Contains(cand, `"result"`) || strings.Contains(cand, `"error"`) {
+			best = cand
+		}
+	}
+	sc := bufio.NewScanner(bytes.NewReader(raw))
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for sc.Scan() {
+		line := strings.TrimRight(sc.Text(), "\r")
+		if line == "" {
+			flush()
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			cur = append(cur, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	flush()
+	if best != "" {
+		return []byte(best)
+	}
+	if last != "" {
+		return []byte(last)
+	}
+	return trimmed
 }
 
 func httpClient(timeout time.Duration, insecure bool) *http.Client {

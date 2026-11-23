@@ -96,6 +96,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "list":
 		return finish(cmdList(rest, stdout), stderr)
 
+	case "mcp-serve":
+		return finish(cmdMCPServe(rest, os.Stdin, stdout, stderr), stderr)
+
 	case "version", "--version", "-v":
 		fmt.Fprintf(stdout, "%s %s\n", toolName, resolveVersion())
 		return exitOK
@@ -158,6 +161,7 @@ Commands:
   surface    Passively inspect advertised MCP tools and A2A agent cards
   diff       Compare two JSON scan reports (new, still open, fixed, not retested)
   list       List the built-in techniques, or describe one in detail
+  mcp-serve  Run sixi-scanner as a stdio MCP server (JSON-RPC 2.0)
   version    Print the version
 
 Get started:

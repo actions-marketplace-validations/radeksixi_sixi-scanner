@@ -17,6 +17,15 @@ import (
 // HTTP transport funnels through here so timeout, retry, header and
 // body-capture behaviour is identical across them.
 func post(ctx context.Context, cfg Config, body []byte, contentType string) (int, string, time.Duration, error) {
+	status, raw, _, elapsed, err := postWithHeaders(ctx, cfg, body, contentType, nil)
+	return status, raw, elapsed, err
+}
+
+// postWithHeaders is post with optional per-call default headers (overridden by
+// cfg.Headers if the caller set the same header explicitly) and returns the
+// response headers so stateful transports such as MCP Streamable HTTP can read
+// Mcp-Session-Id and Content-Type.
+func postWithHeaders(ctx context.Context, cfg Config, body []byte, contentType string, defaultHeaders map[string]string) (int, string, http.Header, time.Duration, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 30 * time.Second
 	}
@@ -28,12 +37,18 @@ func post(ctx context.Context, cfg Config, body []byte, contentType string) (int
 	for attempt := 0; attempt < retryMaxAttempts; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
 		if err != nil {
-			return 0, "", 0, fmt.Errorf("build request: %w", err)
+			return 0, "", nil, 0, fmt.Errorf("build request: %w", err)
 		}
 		req.Header.Set("Content-Type", contentType)
 		req.Header.Set("User-Agent", "sixi-scanner")
 		// A scan must not be served a cached answer.
 		req.Header.Set("Cache-Control", "no-store")
+		for k, v := range defaultHeaders {
+			if k == "" || v == "" {
+				continue
+			}
+			req.Header.Set(k, v)
+		}
 		for k, v := range cfg.Headers {
 			if k == "" {
 				continue
@@ -43,7 +58,7 @@ func post(ctx context.Context, cfg Config, body []byte, contentType string) (int
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return 0, "", time.Since(start), fmt.Errorf("send request: %w", err)
+			return 0, "", nil, time.Since(start), fmt.Errorf("send request: %w", err)
 		}
 
 		// Cap the read so a hostile or broken endpoint cannot exhaust memory.
@@ -51,18 +66,18 @@ func post(ctx context.Context, cfg Config, body []byte, contentType string) (int
 		raw, rerr := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 		resp.Body.Close()
 		if rerr != nil {
-			return resp.StatusCode, "", time.Since(start), fmt.Errorf("read response: %w", rerr)
+			return resp.StatusCode, "", resp.Header, time.Since(start), fmt.Errorf("read response: %w", rerr)
 		}
 
 		if attempt < retryMaxAttempts-1 && shouldRetryTarget(resp, raw) {
 			if err := retrySleep(ctx, retryDelay(resp, attempt)); err != nil {
-				return resp.StatusCode, string(raw), time.Since(start), nil
+				return resp.StatusCode, string(raw), resp.Header, time.Since(start), nil
 			}
 			continue
 		}
-		return resp.StatusCode, string(raw), time.Since(start), nil
+		return resp.StatusCode, string(raw), resp.Header, time.Since(start), nil
 	}
-	return 0, "", time.Since(start), fmt.Errorf("send request: retry budget exhausted")
+	return 0, "", nil, time.Since(start), fmt.Errorf("send request: retry budget exhausted")
 }
 
 // clientKey is everything about a Config that changes how a connection is made.

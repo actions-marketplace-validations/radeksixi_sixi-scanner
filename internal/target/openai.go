@@ -6,15 +6,29 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 )
 
+type chatMsg struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 // openaiTarget speaks the OpenAI chat-completions shape, which is what most
-// self-hosted and proxied agents expose. Most such servers ignore the model
-// field when they have exactly one model behind the endpoint, so it defaults
-// to a placeholder rather than failing.
+// self-hosted, NVIDIA NIM, Sixi-ASI, vLLM, Ollama, and proxied agents expose.
+// Most such servers ignore the model field when they have exactly one model
+// behind the endpoint, so it defaults to a placeholder rather than failing.
+//
+// When Extra["stateful"] == "true", openaiTarget keeps per-session conversation
+// history client-side and implements Sessioner so multi-turn probes run against
+// stateless OpenAI-compatible endpoints too.
 type openaiTarget struct {
-	cfg   Config
-	model string
+	cfg      Config
+	model    string
+	stateful bool
+
+	mu       sync.Mutex
+	sessions map[string][]chatMsg
 }
 
 // NewOpenAI builds a target for an OpenAI-compatible chat-completions endpoint.
@@ -26,13 +40,50 @@ func NewOpenAI(cfg Config) (Target, error) {
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
-	return &openaiTarget{cfg: cfg, model: model}, nil
+	stateful := strings.EqualFold(strings.TrimSpace(cfg.Extra["stateful"]), "true")
+	return &openaiTarget{
+		cfg:      cfg,
+		model:    model,
+		stateful: stateful,
+		sessions: map[string][]chatMsg{},
+	}, nil
+}
+
+// SupportsSessions reports true when client-side multi-turn history (--stateful) is enabled.
+func (o *openaiTarget) SupportsSessions() bool { return o.stateful }
+
+func (o *openaiTarget) messagesFor(ctx context.Context, prompt string) ([]chatMsg, string) {
+	if !o.stateful {
+		return []chatMsg{{Role: "user", Content: prompt}}, ""
+	}
+	sid, ok := SessionFrom(ctx)
+	if !ok {
+		return []chatMsg{{Role: "user", Content: prompt}}, ""
+	}
+	o.mu.Lock()
+	prev := append([]chatMsg(nil), o.sessions[sid]...)
+	o.mu.Unlock()
+	prev = append(prev, chatMsg{Role: "user", Content: prompt})
+	return prev, sid
+}
+
+func (o *openaiTarget) recordTurn(sid, prompt, reply string) {
+	if !o.stateful || sid == "" {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.sessions[sid] = append(o.sessions[sid],
+		chatMsg{Role: "user", Content: prompt},
+		chatMsg{Role: "assistant", Content: reply},
+	)
 }
 
 func (o *openaiTarget) Send(ctx context.Context, prompt string) (Reply, error) {
+	msgs, sid := o.messagesFor(ctx, prompt)
 	body, err := json.Marshal(map[string]any{
 		"model":    o.model,
-		"messages": []map[string]string{{"role": "user", "content": prompt}},
+		"messages": msgs,
 		// A scan wants a short, repeatable answer, not a long varied one.
 		"max_tokens":  512,
 		"temperature": 0,
@@ -55,6 +106,7 @@ func (o *openaiTarget) Send(ctx context.Context, prompt string) (Reply, error) {
 		// reaches the judge rather than being silently dropped.
 		if status >= 200 && status < 300 {
 			reply.Text = clip(stripHTML(raw))
+			o.recordTurn(sid, prompt, reply.Text)
 		}
 		return reply, nil
 	}
@@ -78,15 +130,18 @@ func (o *openaiTarget) Send(ctx context.Context, prompt string) (Reply, error) {
 		// matched as if the agent had said it.
 		if m, isMessage := msg.(map[string]any); isMessage {
 			reply.Text = clip(messageText(m))
+			o.recordTurn(sid, prompt, reply.Text)
 			return reply, nil
 		}
 		// No message at all: this is not the OpenAI shape, and the body is the only evidence.
 		if status >= 200 && status < 300 {
 			reply.Text = clip(stripHTML(raw))
+			o.recordTurn(sid, prompt, reply.Text)
 		}
 		return reply, nil
 	}
 	reply.Text = clip(text)
+	o.recordTurn(sid, prompt, reply.Text)
 	return reply, nil
 }
 
@@ -116,6 +171,9 @@ func messageText(m map[string]any) string {
 }
 
 func (o *openaiTarget) Describe() string {
+	if o.stateful {
+		return fmt.Sprintf("openai-compatible (stateful) %s", redactURL(o.cfg.URL))
+	}
 	return fmt.Sprintf("openai-compatible %s", redactURL(o.cfg.URL))
 }
 

@@ -11,9 +11,9 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 
 all: check
 
-## build: compile the binary into the working tree
+## build: compile a static binary into the working tree
 build:
-	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/sixi-scanner
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/sixi-scanner
 
 ## test: run the test suite
 test:

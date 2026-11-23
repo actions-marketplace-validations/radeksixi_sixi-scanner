@@ -29,10 +29,11 @@ func cmdScan(args []string, stdout, stderr io.Writer) result {
 
 	var (
 		url       = fs.String("url", "", "endpoint to scan (required unless --target echo)")
-		connector = fs.String("target", "openai", "transport: openai, json, chat, mcp, a2a, webform, echo")
+		connector = fs.String("target", "openai", "transport: openai, responses, azure, gemini, anthropic, json, chat, mcp, a2a, webform, echo")
 		headers   = headerFlag{}
 
-		model      = fs.String("model", "", "model field for the openai transport")
+		model      = fs.String("model", "", "model field for provider transports (openai, responses, azure, gemini, anthropic)")
+		stateful   = fs.Bool("stateful", false, "maintain client-side conversation history per session so multi-turn sequences run on provider transports (openai, azure, gemini, anthropic)")
 		bodyTpl    = fs.String("body", "", "request body template for the json transport; {{prompt}}, {{json}}, {{session}} and {{session_json}} are substituted")
 		replyPath  = fs.String("reply-path", "", "dotted path to the reply in the json transport's response")
 		tracePath  = fs.String("trace-path", "", "dotted path to the tool-call array in json or chat transport responses")
@@ -61,8 +62,8 @@ func cmdScan(args []string, stdout, stderr io.Writer) result {
 			"re-run each finding's breaking payload this many extra times to measure reproducibility (k/n)")
 
 		// The optional confirmation stage: off unless an endpoint is named.
-		confirmURL    = fs.String("confirm-url", "", "OpenAI-compatible endpoint to ask whether a candidate break really broke the agent's policy; empty disables the stage")
-		confirmModel  = fs.String("confirm-model", "", "model name to ask at --confirm-url")
+		confirmURL    = fs.String("confirm-url", "", "OpenAI-compatible or laya-as-judge (/v1/judge, /v1/judged-decision, /v1/decisions) endpoint to verify candidate breaks; empty disables the stage")
+		confirmModel  = fs.String("confirm-model", "", "model name to ask at --confirm-url (optional when --confirm-url points at laya-as-judge)")
 		confirmKey    = fs.String("confirm-key", os.Getenv("SIXI_CONFIRM_API_KEY"), "bearer token for --confirm-url (or set SIXI_CONFIRM_API_KEY)")
 		confirmFloor  = fs.String("confirm-min-severity", "medium", "lowest severity an answer may carry and still keep a finding: none, low, medium, high, critical")
 		confirmBudget = fs.Int("confirm-budget", 200,
@@ -135,6 +136,9 @@ Examples:
 	}
 	if *model != "" {
 		cfg.Extra["model"] = *model
+	}
+	if *stateful {
+		cfg.Extra["stateful"] = "true"
 	}
 	if *bodyTpl != "" {
 		cfg.Extra["body"] = *bodyTpl
@@ -219,8 +223,13 @@ Examples:
 				"stage has to know what the agent is for and which data it may show, and guessing that " +
 				"would make its verdicts unfalsifiable")}
 		}
-		if *confirmModel == "" {
-			return result{code: exitUsage, err: fmt.Errorf("--confirm-url needs --confirm-model")}
+		effConfirmModel := *confirmModel
+		if effConfirmModel == "" {
+			if confirm.IsLayaURL(*confirmURL) {
+				effConfirmModel = "laya-as-judge"
+			} else {
+				return result{code: exitUsage, err: fmt.Errorf("--confirm-url needs --confirm-model")}
+			}
 		}
 		// An unrecognised floor ranks as zero, which is "none": a mistyped "hgih" would keep every
 		// candidate the model called a violation at any severity. Refused here, before anything
@@ -229,7 +238,7 @@ Examples:
 			return result{code: exitUsage, err: fmt.Errorf("--confirm-min-severity %q is not a severity; use one of %s",
 				*confirmFloor, confirm.FloorNames())}
 		}
-		stage = confirm.NewStage(confirm.New(*confirmURL, *confirmModel, *confirmKey, *timeout, *confirmBudget), *confirmFloor)
+		stage = confirm.NewStage(confirm.New(*confirmURL, effConfirmModel, *confirmKey, *timeout, *confirmBudget), *confirmFloor)
 		scanCfg.Confirm = stage
 		scanCfg.Policy = tc.Purpose
 	}

@@ -304,3 +304,68 @@ func TestMCPRecordsLatencyAndExtractsToolCalls(t *testing.T) {
 		t.Errorf("reply.ToolCalls = %+v, want [lookup_customer]", reply.ToolCalls)
 	}
 }
+
+func TestMCPStreamableHTTPSSEAutoSelectionAndToolErrorFlag(t *testing.T) {
+	const wantSession = "mcp-stream-99"
+	var calledTool string
+	var sawNotif bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != "application/json, text/event-stream" {
+			w.WriteHeader(http.StatusNotAcceptable)
+			return
+		}
+		var req struct {
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "initialize":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Mcp-Session-Id", wantSession)
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{\"protocolVersion\":\"2024-11-05\"}}\n\n"))
+		case "notifications/initialized":
+			if r.Header.Get("Mcp-Session-Id") == wantSession {
+				sawNotif = true
+			}
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			if r.Header.Get("Mcp-Session-Id") != wantSession {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"2\",\"result\":{\"tools\":[{\"name\":\"reset_challenge\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},{\"name\":\"ask_agent\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}}}}]}}\n\n"))
+		case "tools/call":
+			if r.Header.Get("Mcp-Session-Id") != wantSession {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			calledTool, _ = req.Params["name"].(string)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"3\",\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"validation error\"}]}}\n\n"))
+		}
+	}))
+	defer srv.Close()
+
+	tg, err := NewMCP(Config{URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := tg.Send(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Streamable HTTP Send failed: %v", err)
+	}
+	if !sawNotif {
+		t.Error("expected notifications/initialized handshake")
+	}
+	if calledTool != "ask_agent" {
+		t.Errorf("calledTool = %q, want ask_agent (skipping zero-arg reset_challenge)", calledTool)
+	}
+	if !reply.ToolError {
+		t.Errorf("reply.ToolError = false, want true for isError=true")
+	}
+	if !strings.Contains(reply.Text, "[MCP TOOL ERROR] validation error") {
+		t.Errorf("reply.Text = %q", reply.Text)
+	}
+}

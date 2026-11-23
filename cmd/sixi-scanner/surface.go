@@ -21,6 +21,8 @@ func cmdSurface(args []string, stdout, stderr io.Writer) result {
 		url      = fs.String("url", "", "MCP endpoint or A2A base URL to inspect passively (required)")
 		headers  = headerFlag{}
 		timeout  = fs.Duration("timeout", 15*time.Second, "per-request timeout")
+		repeat   = fs.Int("repeat", 1, "number of MCP tools/list snapshots to check for mid-session manifest mutations (rug pull)")
+		rugPull  = fs.Bool("rug-pull", false, "active-assisted rug-pull check: send benign read-only MCP tool calls between tools/list snapshots to trigger delayed mutations")
 		insecure = fs.Bool("insecure", false, "skip TLS verification (self-signed staging endpoints)")
 		redact   = fs.Bool("redact", false, "scrub secrets and PII from finding evidence before writing reports")
 		quiet    = fs.Bool("quiet", false, "only print the report to stdout")
@@ -63,6 +65,10 @@ Examples:
 		return result{code: exitUsage, err: fmt.Errorf("surface: --url is required")}
 	}
 
+	if *repeat < 1 {
+		return result{code: exitUsage, err: fmt.Errorf("surface: --repeat must be >= 1, got %d", *repeat)}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -70,6 +76,8 @@ Examples:
 		URL:      *url,
 		Headers:  headers.orNil(),
 		Timeout:  *timeout,
+		Repeat:   *repeat,
+		RugPull:  *rugPull,
 		Insecure: *insecure,
 	})
 	if err != nil {

@@ -2,13 +2,14 @@
 
 # Sixi Scanner
 
-[![CI](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/radeksixi/sixi-scanner)](https://github.com/radeksixi/sixi-scanner/releases) [![Go Reference](https://pkg.go.dev/badge/github.com/radeksixi/sixi-scanner.svg)](https://pkg.go.dev/github.com/radeksixi/sixi-scanner) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Benchmark](https://img.shields.io/badge/benchmark-1st%20precision%20%26%20recall-orange)](https://github.com/radeksixi/agent-redteam-benchmark)
+[![CI](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/radeksixi/sixi-scanner)](https://github.com/radeksixi/sixi-scanner/releases) [![PyPI](https://img.shields.io/pypi/v/sixi-scanner)](https://pypi.org/project/sixi-scanner/) [![Go Reference](https://pkg.go.dev/badge/github.com/radeksixi/sixi-scanner.svg)](https://pkg.go.dev/github.com/radeksixi/sixi-scanner) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Benchmark](https://img.shields.io/badge/benchmark-1st%20precision%20%26%20recall-orange)](https://github.com/radeksixi/agent-redteam-benchmark)
 
 A zero-dependency Go red-team scanner, passive MCP/A2A surface & rug-pull inspector, and stdio MCP server for **LLM agents, MCP servers, and A2A endpoints**. Point it at any endpoint you are authorised to test — it speaks OpenAI, Responses API / Microsoft Foundry, Azure OpenAI, Google Gemini, Anthropic, NVIDIA NIM / Sixi-ASI / vLLM, MCP Streamable HTTP (`2025-03-26`), and A2A, enforces deterministic policies on observed tool traces, integrates natively with [`laya-as-judge`](https://github.com/radeksixi/laya-as-judge), and outputs reproducible evidence.
 
 ```console
-# Install via Go, GitHub Releases (static binaries & .whl wheels), or GitHub Action
-$ go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@v1.1.0
+# Run immediately via PyPI (uvx / pip — no Go toolchain needed) or go install
+$ uvx sixi-scanner surface --url https://your-agent.example --rug-pull
+$ pip install sixi-scanner   # or: go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@v1.1.0
 
 # 1. Inspect MCP tools & A2A Agent Cards for poisoning and mid-session rug pulls
 $ sixi-scanner surface --url https://your-agent.example --rug-pull
@@ -17,10 +18,10 @@ $ sixi-scanner surface --url https://your-agent.example --rug-pull
 $ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --stateful --reproduce 1
 
 # 3. Run sixi-scanner as a stdio MCP server for Claude Desktop / Cursor / AI IDEs
-$ sixi-scanner mcp-serve
+$ uvx sixi-scanner mcp-serve
 ```
 
-**45 techniques** (7 structural oracles, 4 multi-turn sequences) · **11 zero-dep connectors** · **Go standard library only (0 external dependencies)** · JSON, SARIF 2.1.0, Markdown, HTML & `--log-jsonl` · [Download `v1.1.0` binaries & wheels](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.1.0) · [v1.0 benchmark write-up](https://radeksixi.github.io/sixi-scanner-1-0-benchmarks-mcp-a2a-and-six-live-bugs/) · Apache 2.0.
+**45 techniques** (7 structural oracles, 4 multi-turn sequences) · **11 zero-dep connectors** · **Go standard library only (0 external dependencies)** · JSON, SARIF 2.1.0, Markdown, HTML & `--log-jsonl` · [PyPI (`pip install sixi-scanner`)](https://pypi.org/project/sixi-scanner/) · [Download `v1.1.0` binaries & wheels](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.1.0) · Apache 2.0.
 
 <p align="center">
   <picture>
@@ -172,13 +173,15 @@ See [docs/STABILITY.md](docs/STABILITY.md) for the `v1.x` CLI, exit-code, and sc
 ## Install
 
 ```console
-# Go toolchain (Go 1.24+, zero external dependencies)
-go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@latest
+# PyPI (pre-compiled static binary wheel — Linux, macOS, Windows; no Go needed)
+uvx sixi-scanner list
+pip install sixi-scanner
 
-# Or download a static binary / Python wheel (.whl) from GitHub Releases
-# (Linux amd64/arm64, macOS amd64/arm64, Windows amd64)
-pip install https://github.com/radeksixi/sixi-scanner/releases/download/v1.1.0/sixi_scanner-1.1.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+# Or via Go toolchain (Go 1.24+, zero external dependencies)
+go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@latest
 ```
+
+Pre-compiled static binaries and `.whl` wheels with `SHA256SUMS` are also attached to every [GitHub Release](https://github.com/radeksixi/sixi-scanner/releases).
 
 Or build from a checkout:
 
@@ -197,8 +200,8 @@ Go 1.24 or later. There is nothing to vendor and nothing to configure.
 {
   "mcpServers": {
     "sixi-scanner": {
-      "command": "sixi-scanner",
-      "args": ["mcp-serve"]
+      "command": "uvx",
+      "args": ["sixi-scanner", "mcp-serve"]
     }
   }
 }

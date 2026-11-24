@@ -2,9 +2,9 @@
 
 # Sixi Scanner
 
-[![CI](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/radeksixi/sixi-scanner)](https://github.com/radeksixi/sixi-scanner/releases) [![PyPI](https://img.shields.io/pypi/v/sixi-scanner)](https://pypi.org/project/sixi-scanner/) [![Go Reference](https://pkg.go.dev/badge/github.com/radeksixi/sixi-scanner.svg)](https://pkg.go.dev/github.com/radeksixi/sixi-scanner) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Benchmark](https://img.shields.io/badge/benchmark-1st%20precision%20%26%20recall-orange)](https://github.com/radeksixi/agent-redteam-benchmark)
+[![CI](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/radeksixi/sixi-scanner)](https://github.com/radeksixi/sixi-scanner/releases) [![PyPI](https://img.shields.io/pypi/v/sixi-scanner)](https://pypi.org/project/sixi-scanner/) [![Go Reference](https://pkg.go.dev/badge/github.com/radeksixi/sixi-scanner.svg)](https://pkg.go.dev/github.com/radeksixi/sixi-scanner) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-A zero-dependency Go red-team scanner, passive MCP/A2A surface & rug-pull inspector, and stdio MCP server for **LLM agents, MCP servers, and A2A endpoints**. Point it at any endpoint you are authorised to test — it speaks OpenAI, Responses API / Microsoft Foundry, Azure OpenAI, Google Gemini, Anthropic, NVIDIA NIM / Sixi-ASI / vLLM, MCP Streamable HTTP (`2025-03-26`), and A2A, enforces deterministic policies on observed tool traces, integrates natively with [`laya-as-judge`](https://github.com/radeksixi/laya-as-judge), and outputs reproducible evidence.
+A zero-dependency Go red-team scanner, passive MCP/A2A & rug-pull inspector, and stdio MCP server for **LLM agents, MCP servers, and A2A endpoints**. Speaks 11 protocols natively, integrates with [`laya-as-judge`](https://github.com/radeksixi/laya-as-judge) to turn breaks into deterministic guardrails, and outputs reproducible CI evidence.
 
 <p align="center">
   <a href="https://radeksixi.github.io/closed-loop-redteam-guard-sixi-scanner-laya-1-2/">
@@ -13,39 +13,29 @@ A zero-dependency Go red-team scanner, passive MCP/A2A surface & rug-pull inspec
 </p>
 
 ```console
-# Run immediately via PyPI (uvx / pip — no Go toolchain needed) or go install
-$ uvx sixi-scanner surface --url https://your-agent.example --rug-pull
-$ pip install sixi-scanner   # or: go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@v1.2.0
+# Install via PyPI (no Go needed) or go install
+$ pip install sixi-scanner   # or: uvx sixi-scanner --help
 
-# 1. Inspect MCP tools & A2A Agent Cards for poisoning and mid-session rug pulls
+# 1. Inspect MCP / A2A surfaces for poisoning & mid-session rug pulls
 $ sixi-scanner surface --url https://your-agent.example --rug-pull --export-laya mcp-guard.json
 
-# 2. Closed Attack -> Guard -> Prove loop with laya-as-judge v1.2.0 (0 output tokens)
+# 2. Attack -> confirm with laya-as-judge (0 output tokens) -> export guardrails
 $ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --stateful \
-    --context agent.json --confirm-url http://127.0.0.1:8000/v1/judge \
-    --out baseline.json --export-laya guard-rules.json
+    --confirm-url http://127.0.0.1:8000/v1/judge --out baseline.json --export-laya rules.json
 
-# 3. Run sixi-scanner as a stdio MCP server (Official MCP Registry: io.github.radeksixi/sixi-scanner)
+# 3. Run as a stdio MCP server (Official MCP Registry: io.github.radeksixi/sixi-scanner)
 $ uvx sixi-scanner mcp-serve
 ```
 
-**45 techniques** (7 structural oracles, 4 multi-turn sequences) · **11 zero-dep connectors** · **Go standard library only (0 external dependencies)** · JSON, SARIF 2.1.0, Markdown, HTML, `--log-jsonl` & `--export-laya` · [PyPI (`pip install sixi-scanner`)](https://pypi.org/project/sixi-scanner/) · [Download `v1.2.0` binaries & wheels](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.2.0) · [Closed-loop write-up](https://radeksixi.github.io/closed-loop-redteam-guard-sixi-scanner-laya-1-2/) · Apache 2.0.
+**45 probes** · **11 zero-dep connectors** · **Go stdlib only (0 deps)** · JSON / SARIF 2.1.0 / `--export-laya` · [PyPI](https://pypi.org/project/sixi-scanner/) · [v1.2.0 Release](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.2.0) · [Closed-Loop Write-Up](https://radeksixi.github.io/closed-loop-redteam-guard-sixi-scanner-laya-1-2/)
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sixi-scanner-1-0-defence-ladder-dark.svg">
-    <img alt="Live 3-rung defence ladder on Atlas (Gemma 4 4B): server leaks drop 18 to 7 to 0 across none, basic, and hardened, while 3-turn sleeper-memory still bypasses regex guards." src="docs/assets/sixi-scanner-1-0-defence-ladder-light.svg" width="100%">
-  </picture>
-</p>
+### Why teams run it
 
-### Why teams run it — four measured insights from real agents
+- **Closes the loop automatically:** `--export-laya` turns confirmed breaks into deterministic `laya-as-judge` guardrails (`0.29 ms` check overhead, `1.00 ms` MCP rug-pull block) and `sixi-scanner diff` proves closure in CI.
+- **Catches what regex and prose miss:** inspects actual tool-call traces (`BOLA`, split refund caps, payload relay) and multi-turn `sleeper-memory` payloads that bypass static filters.
+- **High precision without noisy LLM judges:** **99.4%** precision on MCPTox (`80.6%` recall), **15/15** native DVMCP, and **1st of 7 tools** (`0.821` precision, `1.000` multi-turn) on [agent-redteam-benchmark](https://github.com/radeksixi/agent-redteam-benchmark).
 
-- **The prompt-only hardening trap:** on a live Google ADK agent (`gemma4:4b`), adding refusal rules to the system prompt cut secret leaks from `18 → 7`, but *opened* new Swahili, adversarial poetry, and Bad Likert instruction leaks — there were suddenly rules worth reciting.
-- **The regex guard ceiling:** adding input/output guards blocked 15 attacks, cut scan time 2.4×, and dropped secret leaks to `0` — yet a 3-turn **`sleeper-memory` [CRITICAL]** payload (plant → benign turn → trigger) still bypassed static filters on both `/api/chat` and A2A.
-- **Prose lies; tool traces don't:** an agent politely claimed it helped the customer while executing `lookup_customer("ACC-9999")` (BOLA), two `issue_refund(30 CHF)` calls (**60 > 50 CHF** cumulative cap split), and `send_email` carrying an injected prompt. `sixi-scanner` caught all 3 deterministically on the wire with **0 LLM judge calls** (and exited `0` with 0 FPs on `hardened`).
-- **Low noise without an LLM judge:** on 1,480 recorded Microsoft Foundry turns, deterministic scoring alone reaches **76.3% precision** (`-38%` FPs vs `v0.10.0`, zero recall loss); with confirmation enabled on the full benchmark, `sixi-scanner` ranked **1st of 7 tools** (`0.821` precision, `1.000` multi-turn precision).
-
-**Radek (Sixi)** · [github.com/radeksixi/sixi-scanner](https://github.com/radeksixi/sixi-scanner)
+**Radek Brus (Sixi Lab R&D)** · [github.com/radeksixi/sixi-scanner](https://github.com/radeksixi/sixi-scanner)
 
 ---
 
@@ -171,6 +161,16 @@ Before tagging `v1.0.0`, the deterministic judge, tool-policy engine, and MCP/A2
 - **Live seeded tool-call policy enforcement (`--seed`, `--trace-path tool_calls`, `--context atlas-context.json`):** on `none`, `sixi-scanner` observed 24 real ADK tool calls and deterministically caught `refund-cap-split` (`cumulative 60 CHF > 50 CHF`), `tool-bola` (`ACC-9999`), and `payload-relay` (`send_email`) with zero LLM judge calls; on `hardened` (22 tool calls, 0 server oracle breaches), it exited `0` cleanly.
 - **Live MCP & A2A end-to-end:** passive `surface` scored 0 poisoning FPs on clean MCP/A2A endpoints and caught poisoned MCP tool descriptions, poisoned A2A skill cards, and unauthenticated A2A cards; active `--target mcp` caught `json-schema-bypass` and active `--target a2a` maintained multi-turn sessions (19 turns / 11 sessions) and caught `sleeper-memory`.
 
+<details>
+<summary><strong>v1.0.0 charts (defence ladder, Foundry precision &amp; wire policy)</strong></summary>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sixi-scanner-1-0-defence-ladder-dark.svg">
+    <img alt="Live 3-rung defence ladder on Atlas (Gemma 4 4B): server leaks drop 18 to 7 to 0 across none, basic, and hardened, while 3-turn sleeper-memory still bypasses regex guards." src="docs/assets/sixi-scanner-1-0-defence-ladder-light.svg" width="100%">
+  </picture>
+</p>
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sixi-scanner-1-0-foundry-precision-dark.svg">
@@ -184,6 +184,8 @@ Before tagging `v1.0.0`, the deterministic judge, tool-policy engine, and MCP/A2
     <img alt="Deterministic wire tool policy (cumulative 60 > 50 CHF refund cap split, BOLA, payload relay caught on none; exit 0 on hardened) and live MCP/A2A verification." src="docs/assets/sixi-scanner-1-0-wire-policy-and-protocols-light.svg" width="100%">
   </picture>
 </p>
+
+</details>
 
 See [docs/STABILITY.md](docs/STABILITY.md) for the `v1.x` CLI, exit-code, and schema compatibility policy.
 

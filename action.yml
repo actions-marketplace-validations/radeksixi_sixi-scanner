@@ -93,7 +93,7 @@ inputs:
   version:
     description: "Release tag to download from GitHub Releases"
     required: false
-    default: "v1.2.0"
+    default: "v1.3.0"
   fail-on-findings:
     description: "Fail the step when findings are reported (exit code 1). Set false to upload SARIF before gating."
     required: false

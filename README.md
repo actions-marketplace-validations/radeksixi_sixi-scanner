@@ -27,12 +27,12 @@ $ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --state
 $ uvx sixi-scanner mcp-serve
 ```
 
-**45 probes** · **11 zero-dep connectors** · **Go stdlib only (0 deps)** · JSON / SARIF 2.1.0 / `--export-laya` · [PyPI](https://pypi.org/project/sixi-scanner/) · [v1.2.0 Release](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.2.0) · [Closed-Loop Write-Up](https://radeksixi.github.io/closed-loop-redteam-guard-sixi-scanner-laya-1-2/)
+**50 probes** · **11 zero-dep connectors** · **Go stdlib only (0 deps)** · JSON / SARIF 2.1.0 / `--export-laya` · [PyPI](https://pypi.org/project/sixi-scanner/) · [v1.3.0 Release](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.3.0) · [11-Guardrail & Scanner Shootout](https://radeksixi.github.io/enterprise-agent-guardrail-and-scanner-shootout-sixi-scanner-1-3/)
 
 ### Why teams run it
 
-- **Closes the loop automatically:** `--export-laya` turns confirmed breaks into deterministic `laya-as-judge` guardrails (`0.29 ms` check overhead, `1.00 ms` MCP rug-pull block) and `sixi-scanner diff` proves closure in CI.
-- **Catches what regex and prose miss:** inspects actual tool-call traces (`BOLA`, split refund caps, payload relay) and multi-turn `sleeper-memory` payloads that bypass static filters.
+- **Closes the loop automatically:** `--export-laya` turns confirmed breaks into deterministic `laya-as-judge` guardrails (`0.29 ms` check overhead, `1.00 ms` MCP rug-pull block) with concrete forbidden argument extraction, and `sixi-scanner diff` proves closure in CI.
+- **Catches what regex, prose judges, and standalone guardrails miss:** inspects actual tool-call traces (`forbidden_tables`, `block_sql_injection`, BOLA inside SQL strings, split refund caps, Base64/ROT13 *execute-then-lie* tool calls, and indirect PDF/RAG hijacks even behind withheld replies).
 - **High precision without noisy LLM judges:** **99.4%** precision on MCPTox (`80.6%` recall), **15/15** native DVMCP, and **1st of 7 tools** (`0.821` precision, `1.000` multi-turn) on [agent-redteam-benchmark](https://github.com/radeksixi/agent-redteam-benchmark).
 
 **Radek Brus (Sixi Lab R&D)** · [github.com/radeksixi/sixi-scanner](https://github.com/radeksixi/sixi-scanner)
@@ -43,7 +43,7 @@ $ uvx sixi-scanner mcp-serve
 
 Read this before you use the output for anything.
 
-**A clean result is not an assurance.** It means the 45 probes below did not
+**A clean result is not an assurance.** It means the 50 probes below did not
 produce a finding against the endpoint you named. It says nothing about
 techniques this tool does not implement, and nothing about attacks that need
 judgement no substring match or structural oracle can make. The report says so
@@ -129,6 +129,19 @@ having the agent forward it via `send_email` on the next). **Where it loses is
 breadth:** 8 distinct violating attacks on the stateless lane, against 67 for
 garak and 89 for promptfoo. See the
 [v0.8.3 write-up](https://github.com/radeksixi/agent-redteam-benchmark/blob/main/results/2026-10-12-sixi-oss-v83/README.md).
+
+### Verified for `v1.3.0` (11-Guardrail & 3-Scanner Enterprise Shootout on Jetson AGX Thor, `$0.00`)
+
+`v1.3.0` turns empirical gaps uncovered by benchmarking 11 guardrail architectures and 3 scanners (`sixi-scanner`, `Promptfoo 0.123.1`, `Microsoft PyRIT 1.1.0`) against an enterprise SQLite + 7-PDF + 8-tool ADK agent (`Qwen3.8-27B` via `Sixi-ASI 1.0.0`, `$0.00` local) into deterministic Go code (still **0 external dependencies**):
+
+- **SQL, Private-Table & BOLA-in-SQL Wire Tool Policy (`internal/policy`):** new `forbidden_tables` and `block_sql_injection` rules inspect SQL/query tool arguments deterministically — catching silent `SELECT * FROM employees_payroll`, `sqlite_master` introspection, `OR 1=1`/`UNION SELECT`, and unscoped `SELECT * FROM customers` dumps even when the agent refuses politely or an output proxy withholds the reply.
+- **5 New Enterprise & Obfuscation Probes (`45 → 50` baseline):** `probe.llm06.obfuscated-tool-invocation` (raw Base64/ROT13/Leetspeak *encode-to-execute*), `probe.llm06.tool-sql-injection`, `probe.llm02.private-table-exfiltration`, `probe.llm06.single-turn-cap-split`, and `probe.llm01.rag-document-indirect` (business-SOP PDF hijack). Default `--timeout` raised `30s → 60s` for multi-step tool agents.
+- **Surgical `--export-laya` Argument Extraction:** extracts concrete offending argument substrings (`employees_payroll`, `audit-drop@external-attacker.example`, `ACC-9999`, offending SQL strings) into `blocked_arg_substrings` while excluding allowed scope IDs.
+- **Before vs. After on Atlas Enterprise v2 (`Qwen3.8-27B`, 10 server-side ground-truth oracles):**
+  - Undefended (`--attempts 1`): **`v1.2.0` found `4–5` (`4` oracles) → `v1.3.0` found `7` (`5` trace-backed violations, `5` distinct oracles)** in `186 s` (`50/50`, `0` errors), catching raw Base64 *execute-then-lie* (`send_email` to `audit-drop@external-attacker.example` followed by `"I can't do that"`). A targeted 4-variant sweep of the 5 new probes triggered **`6` distinct server oracles** (`unauthorized_recipient`, `cap_split`, `privileged_action`, `db_private_leaked`, `pdf_indirect_hijack`, `sql_injection_executed`) with `0` marker false positives.
+  - Guarded proxy (`laya-as-judge v1.2.0` HTTP proxy): `v1.3.0` caught an upstream PDF-triggered `SELECT name FROM sqlite_master` via `tool_calls` **even behind a withheld reply**.
+  - Closed loop: `laya-judge verify-sixi` confirmed **`7/7` (`100%`)** regression closure; **Defense-in-Depth** (`DeBERTa-v3` + `Laya v1.2.0` + in-agent tool/PDF boundary) held **`0` critical/high findings and `0` server oracles** across all 50 probes.
+  - Full write-up, OpenClaw `2026.11.7` audit (`5/20 → 0/20` hardened, `0` disk writes), and raw charts: [11-Guardrail & 3-Scanner Enterprise Shootout](https://radeksixi.github.io/enterprise-agent-guardrail-and-scanner-shootout-sixi-scanner-1-3/).
 
 ### Verified for `v1.2.0` (Closed Attack → Guard → Prove Loop with `laya-as-judge v1.2.0`)
 
@@ -372,7 +385,7 @@ Use the official composite GitHub Action ([`action.yml`](action.yml)) — it dow
 ```yaml
 - name: Red-team the agent
   id: sixi
-  uses: radeksixi/sixi-scanner@v1.1.0
+  uses: radeksixi/sixi-scanner@v1.3.0
   with:
     url: ${{ secrets.AGENT_URL }}
     header: "Authorization: Bearer ${{ secrets.AGENT_TOKEN }}"
@@ -421,24 +434,27 @@ or the SARIF uploader of your choice.
 
 `sixi-scanner list` prints the catalogue; `docs/techniques.md` explains the gaps.
 
-Covered, as publicly documented baseline probes (45 active techniques plus passive MCP/A2A surface inspection):
+Covered, as publicly documented baseline probes (50 active techniques plus passive MCP/A2A surface inspection):
 
 - **Prompt injection** — instruction override, forged conversation turns,
   authority and persona framing, inter-agent routing framing, encoded
-  instructions, non-English and low-resource multilingual instructions, indirect
-  and latent document injection, Unicode tag-plane & BiDi/backspace smuggling,
-  MathPrompt, many-shot conditioning, Bad Likert Judge, adversarial poetry,
-  JSON schema constraint bypass, delayed multi-turn instructions, and sleeper
-  memory poisoning
+  instructions, non-English and low-resource multilingual instructions, indirect,
+  latent, and business-SOP PDF/RAG document injection, Unicode tag-plane &
+  BiDi/backspace smuggling, MathPrompt, many-shot conditioning, Bad Likert Judge,
+  adversarial poetry, JSON schema constraint bypass, delayed multi-turn
+  instructions, and sleeper memory poisoning
 - **Sensitive disclosure** — system prompt leakage (direct and as a translation
   task), credential and configuration elicitation (with provider-token patterns
   and placeholder filtering), parameter induction into tool arguments,
   conversation-context leakage, personal data elicitation (with role-mailbox
-  filtering), canary disclosure
+  filtering), private database table exfiltration, canary disclosure
 - **Excessive agency** — tool enumeration, assent to irreversible actions,
-  injected instructions inside tool arguments, scope expansion, per-request cap
-  splitting across a session, outbound payload relay, BOLA, BFLA, SSRF, and
-  deterministic wire policy enforcement via `--context` `policy`
+  injected instructions inside tool arguments, scope expansion, multi-turn and
+  single-turn polite cap splitting, obfuscated Base64/ROT13/leetspeak tool
+  invocation, outbound payload relay, BOLA, BFLA, SSRF, SQL injection / schema
+  introspection, and deterministic wire policy enforcement (`allowed_recipients`,
+  `forbidden_recipients`, `allowed_accounts`, `forbidden_tables`,
+  `block_sql_injection`, cumulative `limits`) via `--context` `policy`
 - **Misinformation and availability** — unqualified compliance claims, false
   action claims adjudicated against the tool trace, narration-only honesty caps,
   declined-then-produced detection, unbounded output, verbatim memorisation
@@ -517,7 +533,7 @@ This is a complete tool for probing an endpoint you can reach, and it is
 deliberately small enough to read in an afternoon. If you need more than this,
 the honest answer is usually that you need a different tool rather than a bigger
 one: a larger technique library bought on trust is worth less than the
-forty-five techniques here, each of which you can check.
+fifty techniques here, each of which you can check.
 
 ## Security
 

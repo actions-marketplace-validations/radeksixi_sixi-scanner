@@ -49,7 +49,7 @@ func cmdScan(args []string, stdout, stderr io.Writer) result {
 		rounds      = fs.Int("rounds", 1, "how many times to walk the whole technique set")
 		attempts    = fs.Int("attempts", 3, "max payload variants per technique per round")
 		concurrency = fs.Int("concurrency", 4, "techniques in flight at once")
-		timeout     = fs.Duration("timeout", 30*time.Second, "per-request timeout")
+		timeout     = fs.Duration("timeout", 60*time.Second, "per-request timeout")
 		minConf     = fs.Float64("min-confidence", 0, "discard breaks scoring below this")
 		seed        = fs.String("seed", "", "prompt sent before every probe, to start each conversation from the same state")
 

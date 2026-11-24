@@ -6,6 +6,12 @@
 
 A zero-dependency Go red-team scanner, passive MCP/A2A surface & rug-pull inspector, and stdio MCP server for **LLM agents, MCP servers, and A2A endpoints**. Point it at any endpoint you are authorised to test — it speaks OpenAI, Responses API / Microsoft Foundry, Azure OpenAI, Google Gemini, Anthropic, NVIDIA NIM / Sixi-ASI / vLLM, MCP Streamable HTTP (`2025-03-26`), and A2A, enforces deterministic policies on observed tool traces, integrates natively with [`laya-as-judge`](https://github.com/radeksixi/laya-as-judge), and outputs reproducible evidence.
 
+<p align="center">
+  <a href="https://radeksixi.github.io/closed-loop-redteam-guard-sixi-scanner-laya-1-2/">
+    <img alt="Sixi Lab R&amp;D Unified Offering — Closed Attack to Guard to Prove Loop: sixi-scanner v1.2.0 and laya-as-judge v1.2.0 ($0.00 local, 0 output tokens)" src="docs/assets/sixi-closed-loop-offering-dark.png" width="100%">
+  </a>
+</p>
+
 ```console
 # Run immediately via PyPI (uvx / pip — no Go toolchain needed) or go install
 $ uvx sixi-scanner surface --url https://your-agent.example --rug-pull

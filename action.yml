@@ -58,6 +58,26 @@ inputs:
     description: "Comma-separated technique IDs to run"
     required: false
     default: ""
+  pack:
+    description: "Static probe pack: agent (50), safety (6), or all (56)"
+    required: false
+    default: "agent"
+  attacker-url:
+    description: "Optional OpenAI-compatible attacker LLM endpoint for adaptive domain probes & Crescendo backtracking (requires context)"
+    required: false
+    default: ""
+  attacker-model:
+    description: "Model name for attacker-url"
+    required: false
+    default: ""
+  attacker-budget:
+    description: "Max domain-tailored adaptive scenarios generated when attacker-url is set"
+    required: false
+    default: "8"
+  adaptive-turns:
+    description: "Max conversation turns per adaptive scenario"
+    required: false
+    default: "3"
   exclude:
     description: "Comma-separated technique IDs to skip"
     required: false
@@ -93,7 +113,7 @@ inputs:
   version:
     description: "Release tag to download from GitHub Releases"
     required: false
-    default: "v1.3.0"
+    default: "v1.4.0"
   fail-on-findings:
     description: "Fail the step when findings are reported (exit code 1). Set false to upload SARIF before gating."
     required: false
@@ -167,6 +187,11 @@ runs:
         SIXI_CONFIRM_MODEL: ${{ inputs.confirm-model }}
         SIXI_CONFIRM_API_KEY: ${{ inputs.confirm-key }}
         SIXI_ONLY: ${{ inputs.only }}
+        SIXI_PACK: ${{ inputs.pack }}
+        SIXI_ATTACKER_URL: ${{ inputs.attacker-url }}
+        SIXI_ATTACKER_MODEL: ${{ inputs.attacker-model }}
+        SIXI_ATTACKER_BUDGET: ${{ inputs.attacker-budget }}
+        SIXI_ADAPTIVE_TURNS: ${{ inputs.adaptive-turns }}
         SIXI_EXCLUDE: ${{ inputs.exclude }}
         SIXI_TAG: ${{ inputs.tag }}
         SIXI_MIN_SEVERITY: ${{ inputs.min-severity }}
@@ -199,6 +224,11 @@ runs:
           if [ -n "$SIXI_CONFIRM_URL" ]; then ARGS+=(--confirm-url "$SIXI_CONFIRM_URL"); fi
           if [ -n "$SIXI_CONFIRM_MODEL" ]; then ARGS+=(--confirm-model "$SIXI_CONFIRM_MODEL"); fi
           if [ -n "$SIXI_ONLY" ]; then ARGS+=(--only "$SIXI_ONLY"); fi
+          if [ -n "$SIXI_PACK" ] && [ "$SIXI_PACK" != "agent" ]; then ARGS+=(--pack "$SIXI_PACK"); fi
+          if [ -n "$SIXI_ATTACKER_URL" ]; then
+            ARGS+=(--attacker-url "$SIXI_ATTACKER_URL" --attacker-budget "$SIXI_ATTACKER_BUDGET" --adaptive-turns "$SIXI_ADAPTIVE_TURNS")
+            if [ -n "$SIXI_ATTACKER_MODEL" ]; then ARGS+=(--attacker-model "$SIXI_ATTACKER_MODEL"); fi
+          fi
           if [ -n "$SIXI_EXCLUDE" ]; then ARGS+=(--exclude "$SIXI_EXCLUDE"); fi
           if [ -n "$SIXI_TAG" ]; then ARGS+=(--tag "$SIXI_TAG"); fi
           if [ -n "$SIXI_MIN_SEVERITY" ]; then ARGS+=(--min-severity "$SIXI_MIN_SEVERITY"); fi

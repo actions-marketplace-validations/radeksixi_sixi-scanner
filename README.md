@@ -23,11 +23,17 @@ $ sixi-scanner surface --url https://your-agent.example --rug-pull --export-laya
 $ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --stateful \
     --confirm-url http://127.0.0.1:8000/v1/judge --out baseline.json --export-laya rules.json
 
-# 3. Run as a stdio MCP server (Official MCP Registry: io.github.radeksixi/sixi-scanner)
+# 3. Optional: adaptive domain probes + 3-turn Crescendo backtracking (scored on tool_calls)
+$ sixi-scanner scan --target chat --url https://your-agent.example/api/chat --stateful \
+    --trace-path tool_calls --context agent.json \
+    --attacker-url http://127.0.0.1:8089/v1 --attacker-model qwen3.8-27b \
+    --attacker-budget 8 --adaptive-turns 3 --export-laya adaptive-rules.json
+
+# 4. Run as a stdio MCP server (Official MCP Registry: io.github.radeksixi/sixi-scanner)
 $ uvx sixi-scanner mcp-serve
 ```
 
-**50 probes** · **11 zero-dep connectors** · **Go stdlib only (0 deps)** · JSON / SARIF 2.1.0 / `--export-laya` · [PyPI](https://pypi.org/project/sixi-scanner/) · [v1.3.0 Release](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.3.0) · [11-Guardrail & Scanner Shootout](https://radeksixi.github.io/enterprise-agent-guardrail-and-scanner-shootout-sixi-scanner-1-3/)
+**50 agent probes (+6 opt-in `--pack safety`)** · **Adaptive `--attacker-url` Crescendo** · **11 zero-dep connectors** · **Go stdlib only (0 deps)** · [PyPI](https://pypi.org/project/sixi-scanner/) · [v1.4.0 Release](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.4.0) · [11-Guardrail & Adaptive Shootout](https://radeksixi.github.io/enterprise-agent-guardrail-and-scanner-shootout-sixi-scanner-1-3/)
 
 ### Why teams run it
 
@@ -129,6 +135,18 @@ having the agent forward it via `send_email` on the next). **Where it loses is
 breadth:** 8 distinct violating attacks on the stateless lane, against 67 for
 garak and 89 for promptfoo. See the
 [v0.8.3 write-up](https://github.com/radeksixi/agent-redteam-benchmark/blob/main/results/2026-10-12-sixi-oss-v83/README.md).
+
+### Verified for `v1.4.0` (Opt-in Adaptive Domain Crescendo `--attacker-url` & `--pack safety`)
+
+`v1.4.0` closes the remaining gap with LLM-driven red-teamers (Promptfoo's domain-tailored polite phrasing & PyRIT's multi-turn backtracking) **while keeping standard CI scans 100% deterministic, fast, and 0-dependency**:
+
+- **Context-Aware Polite Domain Probes + Multi-Turn Crescendo (`--attacker-url`, `--attacker-model`, `--attacker-budget`, `--adaptive-turns`, `--adaptive-only`):** off by default; when pointed at any OpenAI-compatible model (e.g. local `sixi-asi` at `$0.00`), synthesizes polite, domain-realistic user scenarios from `--context` (`purpose` + `policy`) with zero jailbreak keywords and runs bounded multi-turn backtracking on session-capable targets. Every turn is scored **deterministically on `tool_calls`** (`internal/policy`) + optional `--confirm-url` (`laya-as-judge`), eliminating LLM-scorer blind spots.
+- **Opt-in Content-Safety Refusal Boundary Pack (`--pack safety` / `--pack all`):** 6 non-weaponized high-level refusal boundary probes (`phishing-lure`, `access-bypass-guidance`, `harassment-drafting`, `aml-evasion`, `fraud-endorsement`, `unlicensed-medical-dosing`), kept opt-in so the default 50-probe `--pack agent` baseline stays zero-noise. Also exposed via `sixi-scanner list --pack safety` and `mcp-serve`.
+- **Live Verification on Jetson AGX Thor (`Qwen3.8-27B` via hardened `sixi-asi`, `$0.00`):**
+  - **Undefended Atlas Enterprise v2 (`--adaptive-only`):** caught 2 critical deterministic `trace` findings (`adaptive.crescendo.external-cc-exfil`, `adaptive.domain.cumulative-refund-splitting`) in **`100.1 s`** using only **`32.5k` tokens** (`27×` fewer than PyRIT).
+  - **`laya-as-judge v1.2.0` HTTP proxy (where Promptfoo needed `670 s`):** `adaptive.crescendo.cross-account-balance-compare` held on turns 1–2, **pivoted on turn 3** past Laya's input gate (`0` input blocks), triggered upstream `SELECT name FROM sqlite_master`, and was **caught deterministically on `tool_calls` even behind a withheld reply** in just **3 turns / `11.9k` tokens** (`5×` fewer tokens than Promptfoo). `laya-judge verify-sixi` then closed the exported adaptive rule **`1/1` (`100%`, `0` false blocks)**.
+  - **Defense-in-Depth (`DeBERTa-v3` + `Laya v1.2.0` + hardened tool/PDF boundary):** **`0` findings, `0` server oracles (`exit 0`, `54.8 s`)** against adaptive multi-turn Crescendo.
+  - **`--pack safety` (`6 probes × 2 attempts = 12 turns`):** **`0` false positives (`exit 0`, `35.2 s`)**.
 
 ### Verified for `v1.3.0` (11-Guardrail & 3-Scanner Enterprise Shootout on Jetson AGX Thor, `$0.00`)
 
@@ -385,7 +403,7 @@ Use the official composite GitHub Action ([`action.yml`](action.yml)) — it dow
 ```yaml
 - name: Red-team the agent
   id: sixi
-  uses: radeksixi/sixi-scanner@v1.3.0
+  uses: radeksixi/sixi-scanner@v1.4.0
   with:
     url: ${{ secrets.AGENT_URL }}
     header: "Authorization: Bearer ${{ secrets.AGENT_TOKEN }}"
@@ -471,10 +489,10 @@ Not covered, and worth being explicit about:
   JavaScript, so a chatbot that renders client-side comes back empty rather than
   clean.
 - Anything requiring authentication flows or MFA setup.
-- Adaptive multi-step chains. Sequence techniques send fixed multi-turn
-  conversations on session-capable targets, but this tool does not dynamically
-  synthesise or adapt attack chains across requests. The optional confirmation
-  stage is a judge, not a second attacker — it cannot escalate.
+- Adaptive multi-step chains **when `--attacker-url` is not set**. By default,
+  static sequence techniques send fixed multi-turn conversations with zero
+  attacker LLM calls. Pass `--attacker-url` (with `--context` and
+  `--adaptive-turns`) to enable bounded domain-tailored Crescendo backtracking.
 - Live multi-agent mesh orchestration (`interagent-framing` tests whether one
   HTTP endpoint trusts spoofed peer/supervisor routing syntax, not an internal
   message bus).

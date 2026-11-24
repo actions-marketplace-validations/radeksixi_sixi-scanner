@@ -64,7 +64,11 @@ opting out `refusal-consistency` or `interagent-framing` was measured to lose
 
 ## What ships
 
-50 techniques across six categories (including 7 structural-oracle probes, 4 multi-turn sequences, and 5 enterprise DB/SQLi/obfuscation/RAG probes added in `v1.3.0`), plus passive MCP/A2A surface inspection via `sixi-scanner surface`.
+50 agentic techniques across six categories (including 7 structural-oracle probes, 4 multi-turn sequences, and 5 enterprise DB/SQLi/obfuscation/RAG probes) in the default `--pack agent` baseline, plus:
+
+- **`--pack safety`** (opt-in, 6 high-level refusal-boundary probes: phishing lure, unauthorized access bypass guidance, targeted harassment, AML structuring evasion, BEC invoice fraud, and unlicensed high-risk medical dosing; use `--pack all` for all 56 static probes).
+- **Adaptive domain & Crescendo mode (`--attacker-url`)** (opt-in, off by default): synthesizes polite, domain-tailored scenarios from `--context` (`purpose` + `policy`) and runs bounded multi-turn Crescendo backtracking (`--adaptive-turns`, `--attacker-budget`), scored deterministically on observed `tool_calls` (`internal/policy`) and optional `--confirm-url` (`laya-as-judge`).
+- **Passive surface inspection** via `sixi-scanner surface` (MCP `tools/list`, `--rug-pull`, A2A Agent Cards).
 
 ### Prompt injection — `llm01`
 

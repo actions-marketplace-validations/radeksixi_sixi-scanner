@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/radeksixi/sixi-scanner/internal/adaptive"
 	"github.com/radeksixi/sixi-scanner/internal/confirm"
 	"github.com/radeksixi/sixi-scanner/internal/engine"
 	"github.com/radeksixi/sixi-scanner/internal/judge"
@@ -41,15 +42,24 @@ func cmdScan(args []string, stdout, stderr io.Writer) result {
 		formField  = fs.String("field", "", "form field name for the webform transport")
 		formSelect = fs.String("reply-selector", "", "open|close markers delimiting the reply in the page, as \"<div class=reply>|<div class=input\"")
 
+		pack        = fs.String("pack", "agent", "probe pack: agent (50 agentic probes), safety (6 content-safety boundary probes), all (56 probes)")
 		only        = fs.String("only", "", "comma-separated technique IDs to run; default is all")
 		exclude     = fs.String("exclude", "", "comma-separated technique IDs to skip")
 		tag         = fs.String("tag", "", "comma-separated tags; only techniques carrying all of them run")
 		minSeverity = fs.String("min-severity", "", "skip findings below this severity: info, low, medium, high, critical")
 
+		// Optional adaptive domain-attack & multi-turn Crescendo stage: off by default.
+		attackerURL    = fs.String("attacker-url", "", "optional OpenAI-compatible LLM endpoint to generate polite domain scenarios from --context and run adaptive multi-turn Crescendo backtracking")
+		attackerModel  = fs.String("attacker-model", "", "model name for --attacker-url")
+		attackerKey    = fs.String("attacker-key", os.Getenv("SIXI_ATTACKER_API_KEY"), "bearer token for --attacker-url (or set SIXI_ATTACKER_API_KEY)")
+		attackerBudget = fs.Int("attacker-budget", 8, "max domain-tailored adaptive scenarios generated when --attacker-url is set")
+		adaptiveTurns  = fs.Int("adaptive-turns", 3, "max conversation turns per adaptive scenario (Crescendo backtracking on session-capable targets)")
+		adaptiveOnly   = fs.Bool("adaptive-only", false, "run only adaptive scenarios from --attacker-url, skipping static baseline probes")
+
 		rounds      = fs.Int("rounds", 1, "how many times to walk the whole technique set")
 		attempts    = fs.Int("attempts", 3, "max payload variants per technique per round")
 		concurrency = fs.Int("concurrency", 4, "techniques in flight at once")
-		timeout     = fs.Duration("timeout", 30*time.Second, "per-request timeout")
+		timeout     = fs.Duration("timeout", 60*time.Second, "per-request timeout")
 		minConf     = fs.Float64("min-confidence", 0, "discard breaks scoring below this")
 		seed        = fs.String("seed", "", "prompt sent before every probe, to start each conversation from the same state")
 
@@ -128,6 +138,20 @@ Examples:
 	if *reproduce < 0 {
 		return result{code: exitUsage, err: fmt.Errorf("--reproduce must be >= 0, got %d", *reproduce)}
 	}
+	if *adaptiveOnly && strings.TrimSpace(*attackerURL) == "" {
+		return result{code: exitUsage, err: fmt.Errorf("--adaptive-only requires --attacker-url")}
+	}
+	if strings.TrimSpace(*attackerURL) != "" {
+		if *contextPath == "" {
+			return result{code: exitUsage, err: fmt.Errorf("--attacker-url requires --context (purpose and/or wire policy) so generated probes match the target's domain")}
+		}
+		if *attackerBudget <= 0 {
+			return result{code: exitUsage, err: fmt.Errorf("--attacker-budget must be >= 1, got %d", *attackerBudget)}
+		}
+		if *adaptiveTurns <= 0 {
+			return result{code: exitUsage, err: fmt.Errorf("--adaptive-turns must be >= 1, got %d", *adaptiveTurns)}
+		}
+	}
 	cfg := target.Config{
 		URL:      *url,
 		Timeout:  *timeout,
@@ -165,7 +189,7 @@ Examples:
 		return result{code: exitUsage, err: err}
 	}
 
-	reg, err := selectTechniques(splitCommaList(*only), splitCommaList(*exclude), splitCommaList(*tag))
+	reg, err := selectTechniques(*pack, splitCommaList(*only), splitCommaList(*exclude), splitCommaList(*tag))
 	if err != nil {
 		return result{code: exitUsage, err: err}
 	}
@@ -268,14 +292,84 @@ Examples:
 		}
 	}
 
-	scan, err := engine.Run(ctx, scanCfg)
-	if attemptLog != nil {
-		if cerr := attemptLog.Close(); cerr != nil && err == nil {
-			return result{code: exitUsage, err: fmt.Errorf("flush --log-jsonl: %w", cerr)}
+	var scan *report.Scan
+	if !*adaptiveOnly {
+		scan, err = engine.Run(ctx, scanCfg)
+		if err != nil {
+			if attemptLog != nil {
+				_ = attemptLog.Close()
+			}
+			return result{code: exitUsage, err: err}
+		}
+	} else {
+		now := time.Now().UTC()
+		scan = &report.Scan{
+			SchemaVersion: report.SchemaVersion,
+			Target:        tgt.Describe(),
+			StartedAt:     now,
+			FinishedAt:    now,
+			Options: report.Options{
+				Rounds:        1,
+				MaxAttempts:   *adaptiveTurns,
+				Concurrency:   *concurrency,
+				MinConfidence: *minConf,
+			},
+			Findings: []report.Finding{},
 		}
 	}
-	if err != nil {
-		return result{code: exitUsage, err: err}
+
+	if strings.TrimSpace(*attackerURL) != "" && ctx.Err() == nil {
+		if !*quiet {
+			fmt.Fprintf(stderr, "  running adaptive domain + Crescendo pass (%d scenarios x max %d turns via %s)...\n",
+				*attackerBudget, *adaptiveTurns, *attackerURL)
+		}
+		adRes, adErr := adaptive.Run(ctx, adaptive.Config{
+			AttackerURL:   *attackerURL,
+			AttackerModel: *attackerModel,
+			AttackerKey:   *attackerKey,
+			Timeout:       *timeout,
+			Target:        tgt,
+			Purpose:       tc.Purpose,
+			ToolPolicy:    scanCfg.ToolPolicy,
+			Confirm:       scanCfg.Confirm,
+			Seed:          *seed,
+			Budget:        *attackerBudget,
+			MaxTurns:      *adaptiveTurns,
+			Concurrency:   *concurrency,
+			OnAttempt:     scanCfg.OnAttempt,
+		})
+		if adErr != nil {
+			if *adaptiveOnly {
+				if attemptLog != nil {
+					_ = attemptLog.Close()
+				}
+				return result{code: exitUsage, err: adErr}
+			}
+			scan.TargetNotes = append(scan.TargetNotes, fmt.Sprintf("Adaptive attacker stage failed: %v", adErr))
+		} else {
+			scan.FinishedAt = time.Now().UTC()
+			scan.Attempts += adRes.TurnsSent
+			scan.Findings = append(scan.Findings, adRes.Findings...)
+			seenID := map[string]bool{}
+			for _, id := range scan.Options.TechniqueIDs {
+				seenID[id] = true
+			}
+			for _, a := range adRes.Attempts {
+				if !seenID[a.TechniqueID] {
+					seenID[a.TechniqueID] = true
+					scan.Options.TechniqueIDs = append(scan.Options.TechniqueIDs, a.TechniqueID)
+				}
+			}
+			scan.TargetNotes = append(scan.TargetNotes, fmt.Sprintf(
+				"Adaptive attacker pass ran %d domain scenarios (%d turns, max %d turns/scenario) via %s.",
+				adRes.ScenariosGenerated, adRes.TurnsSent, *adaptiveTurns, *attackerURL))
+		}
+	}
+
+	if attemptLog != nil {
+		if cerr := attemptLog.Close(); cerr != nil {
+			return result{code: exitUsage, err: fmt.Errorf("flush --log-jsonl: %w", cerr)}
+		}
 	}
 	scan.Tool = toolName
 	// The same version the version command prints. The bare variable is "dev" for anyone who
@@ -354,9 +448,12 @@ Examples:
 	return result{code: exitOK}
 }
 
-// selectTechniques applies --only, --exclude and --tag in that order.
-func selectTechniques(only, exclude, tags []string) (*tech.Registry, error) {
-	reg := baseline.Registry()
+// selectTechniques loads the chosen pack and applies --only, --exclude and --tag in that order.
+func selectTechniques(pack string, only, exclude, tags []string) (*tech.Registry, error) {
+	reg, err := baseline.RegistryForPack(pack)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(only) > 0 {
 		var err error

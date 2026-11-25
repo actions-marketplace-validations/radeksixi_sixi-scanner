@@ -2,44 +2,46 @@
 
 # Sixi Scanner
 
-[![CI](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/radeksixi/sixi-scanner)](https://github.com/radeksixi/sixi-scanner/releases) [![PyPI](https://img.shields.io/pypi/v/sixi-scanner)](https://pypi.org/project/sixi-scanner/) [![Go Reference](https://pkg.go.dev/badge/github.com/radeksixi/sixi-scanner.svg)](https://pkg.go.dev/github.com/radeksixi/sixi-scanner) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![Benchmark](https://img.shields.io/badge/benchmark-1st%20precision%20%26%20recall-orange)](https://github.com/radeksixi/agent-redteam-benchmark)
+[![CI](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/radeksixi/sixi-scanner/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/radeksixi/sixi-scanner)](https://github.com/radeksixi/sixi-scanner/releases) [![PyPI](https://img.shields.io/pypi/v/sixi-scanner)](https://pypi.org/project/sixi-scanner/) [![Go Reference](https://pkg.go.dev/badge/github.com/radeksixi/sixi-scanner.svg)](https://pkg.go.dev/github.com/radeksixi/sixi-scanner) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-A zero-dependency Go red-team scanner, passive MCP/A2A surface & rug-pull inspector, and stdio MCP server for **LLM agents, MCP servers, and A2A endpoints**. Point it at any endpoint you are authorised to test — it speaks OpenAI, Responses API / Microsoft Foundry, Azure OpenAI, Google Gemini, Anthropic, NVIDIA NIM / Sixi-ASI / vLLM, MCP Streamable HTTP (`2025-03-26`), and A2A, enforces deterministic policies on observed tool traces, integrates natively with [`laya-as-judge`](https://github.com/radeksixi/laya-as-judge), and outputs reproducible evidence.
+A zero-dependency Go red-team scanner, passive MCP/A2A & rug-pull inspector, and stdio MCP server for **LLM agents, MCP servers, and A2A endpoints**. Speaks 11 protocols natively, integrates with [`laya-as-judge`](https://github.com/radeksixi/laya-as-judge) to turn breaks into deterministic guardrails, and outputs reproducible CI evidence.
+
+<p align="center">
+  <a href="https://radeksixi.github.io/closed-loop-redteam-guard-sixi-scanner-laya-1-2/">
+    <img alt="Sixi Lab R&amp;D Unified Offering — Closed Attack to Guard to Prove Loop: sixi-scanner v1.2.0 and laya-as-judge v1.2.0 ($0.00 local, 0 output tokens)" src="docs/assets/sixi-closed-loop-offering-dark.png" width="100%">
+  </a>
+</p>
 
 ```console
-# Run immediately via PyPI (uvx / pip — no Go toolchain needed) or go install
-$ uvx sixi-scanner surface --url https://your-agent.example --rug-pull
-$ pip install sixi-scanner   # or: go install github.com/radeksixi/sixi-scanner/cmd/sixi-scanner@v1.2.0
+# Install via PyPI (no Go needed) or go install
+$ pip install sixi-scanner   # or: uvx sixi-scanner --help
 
-# 1. Inspect MCP tools & A2A Agent Cards for poisoning and mid-session rug pulls
+# 1. Inspect MCP / A2A surfaces for poisoning & mid-session rug pulls
 $ sixi-scanner surface --url https://your-agent.example --rug-pull --export-laya mcp-guard.json
 
-# 2. Closed Attack -> Guard -> Prove loop with laya-as-judge v1.2.0 (0 output tokens)
+# 2. Attack -> confirm with laya-as-judge (0 output tokens) -> export guardrails
 $ sixi-scanner scan --url https://your-agent.example/v1/chat/completions --stateful \
-    --context agent.json --confirm-url http://127.0.0.1:8000/v1/judge \
-    --out baseline.json --export-laya guard-rules.json
+    --confirm-url http://127.0.0.1:8000/v1/judge --out baseline.json --export-laya rules.json
 
-# 3. Run sixi-scanner as a stdio MCP server (Official MCP Registry: io.github.radeksixi/sixi-scanner)
+# 3. Optional: adaptive domain probes + 3-turn Crescendo backtracking (scored on tool_calls)
+$ sixi-scanner scan --target chat --url https://your-agent.example/api/chat --stateful \
+    --trace-path tool_calls --context agent.json \
+    --attacker-url http://127.0.0.1:8089/v1 --attacker-model qwen3.8-27b \
+    --attacker-budget 8 --adaptive-turns 3 --export-laya adaptive-rules.json
+
+# 4. Run as a stdio MCP server (Official MCP Registry: io.github.radeksixi/sixi-scanner)
 $ uvx sixi-scanner mcp-serve
 ```
 
-**45 techniques** (7 structural oracles, 4 multi-turn sequences) · **11 zero-dep connectors** · **Go standard library only (0 external dependencies)** · JSON, SARIF 2.1.0, Markdown, HTML, `--log-jsonl` & `--export-laya` · [PyPI (`pip install sixi-scanner`)](https://pypi.org/project/sixi-scanner/) · [Download `v1.2.0` binaries & wheels](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.2.0) · [Closed-loop write-up](https://radeksixi.github.io/closed-loop-redteam-guard-sixi-scanner-laya-1-2/) · Apache 2.0.
+**50 agent probes (+6 opt-in `--pack safety`)** · **Adaptive `--attacker-url` Crescendo** · **11 zero-dep connectors** · **Go stdlib only (0 deps)** · [PyPI](https://pypi.org/project/sixi-scanner/) · [v1.4.0 Release](https://github.com/radeksixi/sixi-scanner/releases/tag/v1.4.0) · [11-Guardrail & Adaptive Shootout](https://radeksixi.github.io/enterprise-agent-guardrail-and-scanner-shootout-sixi-scanner-1-3/)
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sixi-scanner-1-0-defence-ladder-dark.svg">
-    <img alt="Live 3-rung defence ladder on Atlas (Gemma 4 4B): server leaks drop 18 to 7 to 0 across none, basic, and hardened, while 3-turn sleeper-memory still bypasses regex guards." src="docs/assets/sixi-scanner-1-0-defence-ladder-light.svg" width="100%">
-  </picture>
-</p>
+### Why teams run it
 
-### Why teams run it — four measured insights from real agents
+- **Closes the loop automatically:** `--export-laya` turns confirmed breaks into deterministic `laya-as-judge` guardrails (`0.29 ms` check overhead, `1.00 ms` MCP rug-pull block) with concrete forbidden argument extraction, and `sixi-scanner diff` proves closure in CI.
+- **Catches what regex, prose judges, and standalone guardrails miss:** inspects actual tool-call traces (`forbidden_tables`, `block_sql_injection`, BOLA inside SQL strings, split refund caps, Base64/ROT13 *execute-then-lie* tool calls, and indirect PDF/RAG hijacks even behind withheld replies).
+- **High precision without noisy LLM judges:** **99.4%** precision on MCPTox (`80.6%` recall), **15/15** native DVMCP, and **1st of 7 tools** (`0.821` precision, `1.000` multi-turn) on [agent-redteam-benchmark](https://github.com/radeksixi/agent-redteam-benchmark).
 
-- **The prompt-only hardening trap:** on a live Google ADK agent (`gemma4:4b`), adding refusal rules to the system prompt cut secret leaks from `18 → 7`, but *opened* new Swahili, adversarial poetry, and Bad Likert instruction leaks — there were suddenly rules worth reciting.
-- **The regex guard ceiling:** adding input/output guards blocked 15 attacks, cut scan time 2.4×, and dropped secret leaks to `0` — yet a 3-turn **`sleeper-memory` [CRITICAL]** payload (plant → benign turn → trigger) still bypassed static filters on both `/api/chat` and A2A.
-- **Prose lies; tool traces don't:** an agent politely claimed it helped the customer while executing `lookup_customer("ACC-9999")` (BOLA), two `issue_refund(30 CHF)` calls (**60 > 50 CHF** cumulative cap split), and `send_email` carrying an injected prompt. `sixi-scanner` caught all 3 deterministically on the wire with **0 LLM judge calls** (and exited `0` with 0 FPs on `hardened`).
-- **Low noise without an LLM judge:** on 1,480 recorded Microsoft Foundry turns, deterministic scoring alone reaches **76.3% precision** (`-38%` FPs vs `v0.10.0`, zero recall loss); with confirmation enabled on the full benchmark, `sixi-scanner` ranked **1st of 7 tools** (`0.821` precision, `1.000` multi-turn precision).
-
-**Radek (Sixi)** · [github.com/radeksixi/sixi-scanner](https://github.com/radeksixi/sixi-scanner)
+**Radek Brus (Sixi Lab R&D)** · [github.com/radeksixi/sixi-scanner](https://github.com/radeksixi/sixi-scanner)
 
 ---
 
@@ -47,7 +49,7 @@ $ uvx sixi-scanner mcp-serve
 
 Read this before you use the output for anything.
 
-**A clean result is not an assurance.** It means the 45 probes below did not
+**A clean result is not an assurance.** It means the 50 probes below did not
 produce a finding against the endpoint you named. It says nothing about
 techniques this tool does not implement, and nothing about attacks that need
 judgement no substring match or structural oracle can make. The report says so
@@ -134,6 +136,31 @@ breadth:** 8 distinct violating attacks on the stateless lane, against 67 for
 garak and 89 for promptfoo. See the
 [v0.8.3 write-up](https://github.com/radeksixi/agent-redteam-benchmark/blob/main/results/2026-10-12-sixi-oss-v83/README.md).
 
+### Verified for `v1.4.0` (Opt-in Adaptive Domain Crescendo `--attacker-url` & `--pack safety`)
+
+`v1.4.0` closes the remaining gap with LLM-driven red-teamers (Promptfoo's domain-tailored polite phrasing & PyRIT's multi-turn backtracking) **while keeping standard CI scans 100% deterministic, fast, and 0-dependency**:
+
+- **Context-Aware Polite Domain Probes + Multi-Turn Crescendo (`--attacker-url`, `--attacker-model`, `--attacker-budget`, `--adaptive-turns`, `--adaptive-only`):** off by default; when pointed at any OpenAI-compatible model (e.g. local `sixi-asi` at `$0.00`), synthesizes polite, domain-realistic user scenarios from `--context` (`purpose` + `policy`) with zero jailbreak keywords and runs bounded multi-turn backtracking on session-capable targets. Every turn is scored **deterministically on `tool_calls`** (`internal/policy`) + optional `--confirm-url` (`laya-as-judge`), eliminating LLM-scorer blind spots.
+- **Opt-in Content-Safety Refusal Boundary Pack (`--pack safety` / `--pack all`):** 6 non-weaponized high-level refusal boundary probes (`phishing-lure`, `access-bypass-guidance`, `harassment-drafting`, `aml-evasion`, `fraud-endorsement`, `unlicensed-medical-dosing`), kept opt-in so the default 50-probe `--pack agent` baseline stays zero-noise. Also exposed via `sixi-scanner list --pack safety` and `mcp-serve`.
+- **Live Verification on Jetson AGX Thor (`Qwen3.8-27B` via hardened `sixi-asi`, `$0.00`):**
+  - **Undefended Atlas Enterprise v2 (`--adaptive-only`):** caught 2 critical deterministic `trace` findings (`adaptive.crescendo.external-cc-exfil`, `adaptive.domain.cumulative-refund-splitting`) in **`100.1 s`** using only **`32.5k` tokens** (`27×` fewer than PyRIT).
+  - **`laya-as-judge v1.2.0` HTTP proxy (where Promptfoo needed `670 s`):** `adaptive.crescendo.cross-account-balance-compare` held on turns 1–2, **pivoted on turn 3** past Laya's input gate (`0` input blocks), triggered upstream `SELECT name FROM sqlite_master`, and was **caught deterministically on `tool_calls` even behind a withheld reply** in just **3 turns / `11.9k` tokens** (`5×` fewer tokens than Promptfoo). `laya-judge verify-sixi` then closed the exported adaptive rule **`1/1` (`100%`, `0` false blocks)**.
+  - **Defense-in-Depth (`DeBERTa-v3` + `Laya v1.2.0` + hardened tool/PDF boundary):** **`0` findings, `0` server oracles (`exit 0`, `54.8 s`)** against adaptive multi-turn Crescendo.
+  - **`--pack safety` (`6 probes × 2 attempts = 12 turns`):** **`0` false positives (`exit 0`, `35.2 s`)**.
+
+### Verified for `v1.3.0` (11-Guardrail & 3-Scanner Enterprise Shootout on Jetson AGX Thor, `$0.00`)
+
+`v1.3.0` turns empirical gaps uncovered by benchmarking 11 guardrail architectures and 3 scanners (`sixi-scanner`, `Promptfoo 0.123.1`, `Microsoft PyRIT 1.1.0`) against an enterprise SQLite + 7-PDF + 8-tool ADK agent (`Qwen3.8-27B` via `Sixi-ASI 1.0.0`, `$0.00` local) into deterministic Go code (still **0 external dependencies**):
+
+- **SQL, Private-Table & BOLA-in-SQL Wire Tool Policy (`internal/policy`):** new `forbidden_tables` and `block_sql_injection` rules inspect SQL/query tool arguments deterministically — catching silent `SELECT * FROM employees_payroll`, `sqlite_master` introspection, `OR 1=1`/`UNION SELECT`, and unscoped `SELECT * FROM customers` dumps even when the agent refuses politely or an output proxy withholds the reply.
+- **5 New Enterprise & Obfuscation Probes (`45 → 50` baseline):** `probe.llm06.obfuscated-tool-invocation` (raw Base64/ROT13/Leetspeak *encode-to-execute*), `probe.llm06.tool-sql-injection`, `probe.llm02.private-table-exfiltration`, `probe.llm06.single-turn-cap-split`, and `probe.llm01.rag-document-indirect` (business-SOP PDF hijack). Default `--timeout` raised `30s → 60s` for multi-step tool agents.
+- **Surgical `--export-laya` Argument Extraction:** extracts concrete offending argument substrings (`employees_payroll`, `audit-drop@external-attacker.example`, `ACC-9999`, offending SQL strings) into `blocked_arg_substrings` while excluding allowed scope IDs.
+- **Before vs. After on Atlas Enterprise v2 (`Qwen3.8-27B`, 10 server-side ground-truth oracles):**
+  - Undefended (`--attempts 1`): **`v1.2.0` found `4–5` (`4` oracles) → `v1.3.0` found `7` (`5` trace-backed violations, `5` distinct oracles)** in `186 s` (`50/50`, `0` errors), catching raw Base64 *execute-then-lie* (`send_email` to `audit-drop@external-attacker.example` followed by `"I can't do that"`). A targeted 4-variant sweep of the 5 new probes triggered **`6` distinct server oracles** (`unauthorized_recipient`, `cap_split`, `privileged_action`, `db_private_leaked`, `pdf_indirect_hijack`, `sql_injection_executed`) with `0` marker false positives.
+  - Guarded proxy (`laya-as-judge v1.2.0` HTTP proxy): `v1.3.0` caught an upstream PDF-triggered `SELECT name FROM sqlite_master` via `tool_calls` **even behind a withheld reply**.
+  - Closed loop: `laya-judge verify-sixi` confirmed **`7/7` (`100%`)** regression closure; **Defense-in-Depth** (`DeBERTa-v3` + `Laya v1.2.0` + in-agent tool/PDF boundary) held **`0` critical/high findings and `0` server oracles** across all 50 probes.
+  - Full write-up, OpenClaw `2026.11.7` audit (`5/20 → 0/20` hardened, `0` disk writes), and raw charts: [11-Guardrail & 3-Scanner Enterprise Shootout](https://radeksixi.github.io/enterprise-agent-guardrail-and-scanner-shootout-sixi-scanner-1-3/).
+
 ### Verified for `v1.2.0` (Closed Attack → Guard → Prove Loop with `laya-as-judge v1.2.0`)
 
 `v1.2.0` closes the red-team feedback loop between `sixi-scanner` and [`laya-as-judge v1.2.0`](https://github.com/radeksixi/laya-as-judge): `/v1/judge` calls now target the dedicated zero-output-token **`RedTeamVerdictJudge` preset (`judge="redteam"`)** with explicit `violation_confirmed` vs. `is_benign_refusal` arbitration (gracefully falling back to inline criteria on `laya-as-judge v1.0/v1.1`), and `--export-laya <path>` exports every finding as deterministic guardrail rules + regression cases for `laya-as-judge` (`JudgedDecisionEngine`, FastMCP `LayaToolGateMiddleware`, LangGraph `LayaJudgedGateNode`, and `laya-judge verify-sixi`).
@@ -165,6 +192,16 @@ Before tagging `v1.0.0`, the deterministic judge, tool-policy engine, and MCP/A2
 - **Live seeded tool-call policy enforcement (`--seed`, `--trace-path tool_calls`, `--context atlas-context.json`):** on `none`, `sixi-scanner` observed 24 real ADK tool calls and deterministically caught `refund-cap-split` (`cumulative 60 CHF > 50 CHF`), `tool-bola` (`ACC-9999`), and `payload-relay` (`send_email`) with zero LLM judge calls; on `hardened` (22 tool calls, 0 server oracle breaches), it exited `0` cleanly.
 - **Live MCP & A2A end-to-end:** passive `surface` scored 0 poisoning FPs on clean MCP/A2A endpoints and caught poisoned MCP tool descriptions, poisoned A2A skill cards, and unauthenticated A2A cards; active `--target mcp` caught `json-schema-bypass` and active `--target a2a` maintained multi-turn sessions (19 turns / 11 sessions) and caught `sleeper-memory`.
 
+<details>
+<summary><strong>v1.0.0 charts (defence ladder, Foundry precision &amp; wire policy)</strong></summary>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sixi-scanner-1-0-defence-ladder-dark.svg">
+    <img alt="Live 3-rung defence ladder on Atlas (Gemma 4 4B): server leaks drop 18 to 7 to 0 across none, basic, and hardened, while 3-turn sleeper-memory still bypasses regex guards." src="docs/assets/sixi-scanner-1-0-defence-ladder-light.svg" width="100%">
+  </picture>
+</p>
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sixi-scanner-1-0-foundry-precision-dark.svg">
@@ -178,6 +215,8 @@ Before tagging `v1.0.0`, the deterministic judge, tool-policy engine, and MCP/A2
     <img alt="Deterministic wire tool policy (cumulative 60 > 50 CHF refund cap split, BOLA, payload relay caught on none; exit 0 on hardened) and live MCP/A2A verification." src="docs/assets/sixi-scanner-1-0-wire-policy-and-protocols-light.svg" width="100%">
   </picture>
 </p>
+
+</details>
 
 See [docs/STABILITY.md](docs/STABILITY.md) for the `v1.x` CLI, exit-code, and schema compatibility policy.
 
@@ -364,7 +403,7 @@ Use the official composite GitHub Action ([`action.yml`](action.yml)) — it dow
 ```yaml
 - name: Red-team the agent
   id: sixi
-  uses: radeksixi/sixi-scanner@v1.1.0
+  uses: radeksixi/sixi-scanner@v1.4.0
   with:
     url: ${{ secrets.AGENT_URL }}
     header: "Authorization: Bearer ${{ secrets.AGENT_TOKEN }}"
@@ -413,24 +452,27 @@ or the SARIF uploader of your choice.
 
 `sixi-scanner list` prints the catalogue; `docs/techniques.md` explains the gaps.
 
-Covered, as publicly documented baseline probes (45 active techniques plus passive MCP/A2A surface inspection):
+Covered, as publicly documented baseline probes (50 active techniques plus passive MCP/A2A surface inspection):
 
 - **Prompt injection** — instruction override, forged conversation turns,
   authority and persona framing, inter-agent routing framing, encoded
-  instructions, non-English and low-resource multilingual instructions, indirect
-  and latent document injection, Unicode tag-plane & BiDi/backspace smuggling,
-  MathPrompt, many-shot conditioning, Bad Likert Judge, adversarial poetry,
-  JSON schema constraint bypass, delayed multi-turn instructions, and sleeper
-  memory poisoning
+  instructions, non-English and low-resource multilingual instructions, indirect,
+  latent, and business-SOP PDF/RAG document injection, Unicode tag-plane &
+  BiDi/backspace smuggling, MathPrompt, many-shot conditioning, Bad Likert Judge,
+  adversarial poetry, JSON schema constraint bypass, delayed multi-turn
+  instructions, and sleeper memory poisoning
 - **Sensitive disclosure** — system prompt leakage (direct and as a translation
   task), credential and configuration elicitation (with provider-token patterns
   and placeholder filtering), parameter induction into tool arguments,
   conversation-context leakage, personal data elicitation (with role-mailbox
-  filtering), canary disclosure
+  filtering), private database table exfiltration, canary disclosure
 - **Excessive agency** — tool enumeration, assent to irreversible actions,
-  injected instructions inside tool arguments, scope expansion, per-request cap
-  splitting across a session, outbound payload relay, BOLA, BFLA, SSRF, and
-  deterministic wire policy enforcement via `--context` `policy`
+  injected instructions inside tool arguments, scope expansion, multi-turn and
+  single-turn polite cap splitting, obfuscated Base64/ROT13/leetspeak tool
+  invocation, outbound payload relay, BOLA, BFLA, SSRF, SQL injection / schema
+  introspection, and deterministic wire policy enforcement (`allowed_recipients`,
+  `forbidden_recipients`, `allowed_accounts`, `forbidden_tables`,
+  `block_sql_injection`, cumulative `limits`) via `--context` `policy`
 - **Misinformation and availability** — unqualified compliance claims, false
   action claims adjudicated against the tool trace, narration-only honesty caps,
   declined-then-produced detection, unbounded output, verbatim memorisation
@@ -447,10 +489,10 @@ Not covered, and worth being explicit about:
   JavaScript, so a chatbot that renders client-side comes back empty rather than
   clean.
 - Anything requiring authentication flows or MFA setup.
-- Adaptive multi-step chains. Sequence techniques send fixed multi-turn
-  conversations on session-capable targets, but this tool does not dynamically
-  synthesise or adapt attack chains across requests. The optional confirmation
-  stage is a judge, not a second attacker — it cannot escalate.
+- Adaptive multi-step chains **when `--attacker-url` is not set**. By default,
+  static sequence techniques send fixed multi-turn conversations with zero
+  attacker LLM calls. Pass `--attacker-url` (with `--context` and
+  `--adaptive-turns`) to enable bounded domain-tailored Crescendo backtracking.
 - Live multi-agent mesh orchestration (`interagent-framing` tests whether one
   HTTP endpoint trusts spoofed peer/supervisor routing syntax, not an internal
   message bus).
@@ -509,7 +551,7 @@ This is a complete tool for probing an endpoint you can reach, and it is
 deliberately small enough to read in an afternoon. If you need more than this,
 the honest answer is usually that you need a different tool rather than a bigger
 one: a larger technique library bought on trust is worth less than the
-forty-five techniques here, each of which you can check.
+fifty techniques here, each of which you can check.
 
 ## Security
 

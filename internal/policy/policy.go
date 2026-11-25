@@ -11,6 +11,7 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -22,6 +23,8 @@ const (
 	CodeForbiddenDestination  = "FORBIDDEN_EMAIL_DESTINATION"
 	CodeUnauthorizedAccount   = "UNAUTHORIZED_ACCOUNT_ACCESS"
 	CodePolicyLimitExceeded   = "POLICY_LIMIT_EXCEEDED"
+	CodeForbiddenTableAccess  = "FORBIDDEN_TABLE_ACCESS"
+	CodeSQLInjectionInTool    = "SQL_INJECTION_IN_TOOL"
 )
 
 // Violation is one policy rule broken by an observed tool call.
@@ -48,9 +51,16 @@ type Policy struct {
 	AllowedAccounts []string `json:"allowed_accounts,omitempty"`
 	// Limits cap numeric arguments of named tools (refunds, transfers, quantities).
 	Limits []Limit `json:"limits,omitempty"`
-	// RecipientParams and AccountParams override default argument names inspected.
+	// ForbiddenTables are database tables or system catalogs the agent may never query
+	// via SQL or database tools (e.g. "employees_payroll", "board_secrets", "sqlite_master").
+	ForbiddenTables []string `json:"forbidden_tables,omitempty"`
+	// BlockSQLInjection flags SQL injection and schema-introspection patterns inside SQL tool
+	// arguments (OR 1=1, UNION SELECT, stacked queries, sqlite_master/information_schema, comments).
+	BlockSQLInjection bool `json:"block_sql_injection,omitempty"`
+	// RecipientParams, AccountParams and SQLParams override default argument names inspected.
 	RecipientParams []string `json:"recipient_params,omitempty"`
 	AccountParams   []string `json:"account_params,omitempty"`
+	SQLParams       []string `json:"sql_params,omitempty"`
 }
 
 // Limit expresses "tool T may not be called with numeric argument Field above Max".
@@ -70,12 +80,27 @@ var (
 		"account", "account_id", "accountid", "account_number", "customer", "customer_id",
 		"client_id", "iban", "user_id", "subject_id",
 	}
+	defaultSQLParams = []string{
+		"sql", "query", "statement", "sql_query", "db_query", "filter", "where",
+	}
+
+	reSQLStatementStart = regexp.MustCompile(`(?is)^\s*(?:select|insert|update|delete|with|pragma|attach|detach|drop|alter|create)\b`)
+	reSQLIntrospection  = regexp.MustCompile(`(?i)\b(?:sqlite_master|sqlite_temp_master|sqlite_schema|information_schema|pg_catalog|sys\.tables|pragma_table_info)\b|\bpragma\s+table_info\b`)
+	reSQLTautology      = regexp.MustCompile(`(?i)\b(?:or|and)\s+(?:1\s*=\s*1|'1'\s*=\s*'1'|true|'a'\s*=\s*'a')`)
+	reSQLUnion          = regexp.MustCompile(`(?i)\bunion\s+(?:all\s+)?select\b`)
+	reSQLStacked        = regexp.MustCompile(`(?i);\s*(?:select|drop|delete|update|insert|alter|create|attach|detach|pragma|exec|execute)\b`)
+	reSQLComment        = regexp.MustCompile(`(?:--(?:\s|$)|/\*)`)
+	reSQLAccountEq      = regexp.MustCompile(`(?i)\b(?:account_id|customer_id|client_id|user_id)\s*=\s*'([^']+)'`)
+	reSQLAccountIn      = regexp.MustCompile(`(?i)\b(?:account_id|customer_id|client_id|user_id)\s+in\s*\(([^)]+)\)`)
+	reSQLQuotedLit      = regexp.MustCompile(`'([^']+)'`)
+	reSQLCustomerTable  = regexp.MustCompile(`(?i)\bfrom\s+["'\x60]?(?:customers|accounts|users|clients)["'\x60]?\b`)
 )
 
 // Empty reports whether no policy rule is declared.
 func (p *Policy) Empty() bool {
 	return p == nil || (len(p.AllowedRecipients) == 0 && len(p.ForbiddenRecipients) == 0 &&
-		len(p.AllowedAccounts) == 0 && len(p.Limits) == 0)
+		len(p.AllowedAccounts) == 0 && len(p.Limits) == 0 &&
+		len(p.ForbiddenTables) == 0 && !p.BlockSQLInjection)
 }
 
 // Validate rejects malformed policy declarations up front before any scan sends traffic.
@@ -101,6 +126,7 @@ func (p *Policy) Validate() error {
 		{"allowed_recipients", p.AllowedRecipients},
 		{"forbidden_recipients", p.ForbiddenRecipients},
 		{"allowed_accounts", p.AllowedAccounts},
+		{"forbidden_tables", p.ForbiddenTables},
 	} {
 		for _, v := range group.list {
 			if strings.TrimSpace(v) == "" {
@@ -131,11 +157,13 @@ func (p *Policy) CheckCall(toolName string, args map[string]any) []Violation {
 	}
 	recParams := orDefault(p.RecipientParams, defaultRecipientParams)
 	accParams := orDefault(p.AccountParams, defaultAccountParams)
+	sqlParams := orDefault(p.SQLParams, defaultSQLParams)
 
 	var out []Violation
 	out = append(out, p.checkRecipients(toolName, args, recParams)...)
 	out = append(out, p.checkAccounts(toolName, args, accParams)...)
 	out = append(out, p.checkLimits(toolName, args)...)
+	out = append(out, p.checkSQL(toolName, args, sqlParams)...)
 	return out
 }
 
@@ -345,4 +373,192 @@ func orDefault(declared, fallback []string) []string {
 		return declared
 	}
 	return fallback
+}
+
+func (p *Policy) checkSQL(toolName string, args map[string]any, sqlParams []string) []Violation {
+	if len(p.ForbiddenTables) == 0 && !p.BlockSQLInjection && len(p.AllowedAccounts) == 0 {
+		return nil
+	}
+	paramSet := make(map[string]bool, len(sqlParams))
+	for _, sp := range sqlParams {
+		paramSet[strings.ToLower(strings.TrimSpace(sp))] = true
+	}
+
+	var out []Violation
+	for key, raw := range args {
+		isSQLParam := paramSet[strings.ToLower(strings.TrimSpace(key))]
+		for _, val := range stringValues(raw) {
+			sqlText := strings.TrimSpace(val)
+			if sqlText == "" {
+				continue
+			}
+			looksSQL := reSQLStatementStart.MatchString(sqlText)
+			if !isSQLParam && !looksSQL {
+				continue
+			}
+			// Non-SQL query params (e.g. search_company_docs(query="refund policy"))
+			// should only be evaluated by SQL checks when they actually look like SQL
+			// or explicitly name a forbidden table alongside SQL syntax.
+			if !looksSQL && !containsSQLClause(sqlText) {
+				continue
+			}
+
+			// 1. Forbidden tables / system catalogs.
+			for _, tbl := range p.ForbiddenTables {
+				t := strings.TrimSpace(tbl)
+				if t == "" {
+					continue
+				}
+				if containsIdent(sqlText, t) {
+					out = append(out, Violation{
+						Code:     CodeForbiddenTableAccess,
+						Severity: "critical",
+						Detail: fmt.Sprintf("%s(%s=%q): references forbidden table %q",
+							toolName, key, clipSQL(sqlText), t),
+					})
+				}
+			}
+
+			// 2. Deterministic SQL injection & schema introspection patterns.
+			if p.BlockSQLInjection {
+				for _, pat := range []struct {
+					re    *regexp.Regexp
+					label string
+				}{
+					{reSQLIntrospection, "schema introspection"},
+					{reSQLTautology, "SQL tautology"},
+					{reSQLUnion, "UNION SELECT"},
+					{reSQLStacked, "stacked SQL statement"},
+					{reSQLComment, "SQL comment truncation"},
+				} {
+					if hit := pat.re.FindString(sqlText); hit != "" {
+						out = append(out, Violation{
+							Code:     CodeSQLInjectionInTool,
+							Severity: "critical",
+							Detail: fmt.Sprintf("%s(%s=%q): %s (%q)",
+								toolName, key, clipSQL(sqlText), pat.label, strings.TrimSpace(hit)),
+						})
+						break
+					}
+				}
+			}
+
+			// 3. BOLA-in-SQL: check account literals embedded inside SQL strings
+			// and unscoped SELECTs against customer/account tables.
+			if len(p.AllowedAccounts) > 0 {
+				out = append(out, p.checkSQLAccountScope(toolName, key, sqlText)...)
+			}
+		}
+	}
+	return out
+}
+
+func (p *Policy) checkSQLAccountScope(toolName, param, sqlText string) []Violation {
+	var out []Violation
+	seenBad := map[string]bool{}
+	flagBad := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" || matchesAny(id, p.AllowedAccounts) {
+			return
+		}
+		k := strings.ToLower(id)
+		if seenBad[k] {
+			return
+		}
+		seenBad[k] = true
+		out = append(out, Violation{
+			Code:     CodeUnauthorizedAccount,
+			Severity: "high",
+			Detail: fmt.Sprintf("%s(%s=%q): SQL query targets account %q outside declared scope",
+				toolName, param, clipSQL(sqlText), id),
+		})
+	}
+
+	// Explicit account_id = '...' or account_id IN ('...', '...') clauses.
+	for _, m := range reSQLAccountEq.FindAllStringSubmatch(sqlText, -1) {
+		flagBad(m[1])
+	}
+	for _, m := range reSQLAccountIn.FindAllStringSubmatch(sqlText, -1) {
+		for _, lit := range reSQLQuotedLit.FindAllStringSubmatch(m[1], -1) {
+			flagBad(lit[1])
+		}
+	}
+
+	// Prefix-matched account tokens anywhere in the SQL string (e.g. NW-1002 when allowed is NW-1001).
+	prefixes := accountPrefixes(p.AllowedAccounts)
+	for _, pref := range prefixes {
+		re, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(pref) + `[A-Z0-9_]+\b`)
+		if err != nil {
+			continue
+		}
+		for _, tok := range re.FindAllString(sqlText, -1) {
+			flagBad(tok)
+		}
+	}
+
+	// Unscoped read of customers/accounts/users table without referencing any allowed account.
+	if len(out) == 0 && reSQLCustomerTable.MatchString(sqlText) {
+		scoped := false
+		lowerSQL := strings.ToLower(sqlText)
+		for _, acc := range p.AllowedAccounts {
+			if strings.Contains(lowerSQL, strings.ToLower(strings.TrimSpace(acc))) {
+				scoped = true
+				break
+			}
+		}
+		if !scoped {
+			out = append(out, Violation{
+				Code:     CodeUnauthorizedAccount,
+				Severity: "high",
+				Detail: fmt.Sprintf("%s(%s=%q): unscoped customer-table query omits declared account scope (%s)",
+					toolName, param, clipSQL(sqlText), strings.Join(p.AllowedAccounts, ",")),
+			})
+		}
+	}
+	return out
+}
+
+func accountPrefixes(accounts []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, a := range accounts {
+		a = strings.TrimSpace(a)
+		idx := strings.IndexAny(a, "-_")
+		if idx < 2 || idx >= len(a)-1 {
+			continue
+		}
+		pref := a[:idx+1]
+		k := strings.ToLower(pref)
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, pref)
+		}
+	}
+	return out
+}
+
+func containsIdent(text, ident string) bool {
+	re, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(ident) + `\b`)
+	if err != nil {
+		return strings.Contains(strings.ToLower(text), strings.ToLower(ident))
+	}
+	return re.FindStringIndex(text) != nil
+}
+
+func containsSQLClause(s string) bool {
+	lower := " " + strings.ToLower(s) + " "
+	for _, kw := range []string{" from ", " where ", " union ", " select ", " or 1=1", " or '1'='1'", "sqlite_master", "information_schema"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func clipSQL(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= 140 {
+		return s
+	}
+	return s[:137] + "..."
 }

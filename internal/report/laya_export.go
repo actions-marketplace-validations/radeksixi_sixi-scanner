@@ -58,9 +58,11 @@ type LayaRegressionCase struct {
 }
 
 var (
-	reLayaTitleTool = regexp.MustCompile(`:\s*([A-Za-z0-9_\-\.]+)\s*$`)
-	reLayaCallTool  = regexp.MustCompile(`\b([a-zA-Z_][a-zA-Z0-9_\-]*)\s*\(`)
-	reLayaSpaces    = regexp.MustCompile(`\s+`)
+	reLayaTitleTool   = regexp.MustCompile(`:\s*([A-Za-z0-9_\-\.]+)\s*$`)
+	reLayaCallTool    = regexp.MustCompile(`\b([a-zA-Z_][a-zA-Z0-9_\-]*)\s*\(`)
+	reLayaSpaces      = regexp.MustCompile(`\s+`)
+	reLayaQuotedToken = regexp.MustCompile(`"([^"]{3,96})"`)
+	reLayaPolicyCode  = regexp.MustCompile(`^[A-Z0-9_]{6,}$`)
 )
 
 // BuildLayaGuardPack converts every finding in scan into deterministic
@@ -104,10 +106,33 @@ func BuildLayaGuardPack(scan *Scan) LayaGuardPack {
 			if m := reLayaCallTool.FindStringSubmatch(f.Evidence.Reason + " " + f.Evidence.Response); len(m) == 2 {
 				blockedTools = append(blockedTools, m[1])
 			}
-			for _, mk := range f.Evidence.Markers {
-				if len(strings.TrimSpace(mk)) >= 4 {
-					blockedArgs = append(blockedArgs, strings.TrimSpace(mk))
+			seenArg := map[string]bool{}
+			addArg := func(s string) {
+				s = strings.TrimSpace(s)
+				if len(s) < 4 || seenArg[strings.ToLower(s)] {
+					return
 				}
+				seenArg[strings.ToLower(s)] = true
+				blockedArgs = append(blockedArgs, s)
+			}
+			// Extract concrete offending argument values (forbidden tables, unauthorized accounts,
+			// emails, SQLi patterns) quoted inside the trace-policy violation reason.
+			for _, m := range reLayaQuotedToken.FindAllStringSubmatch(f.Evidence.Reason, -1) {
+				val := strings.TrimSpace(m[1])
+				if val != "" && !reLayaPolicyCode.MatchString(val) {
+					addArg(val)
+				}
+			}
+			for _, mk := range f.Evidence.Markers {
+				mk = strings.TrimSpace(mk)
+				if len(mk) < 4 {
+					continue
+				}
+				// Skip abstract policy violation codes when concrete argument substrings were extracted.
+				if reLayaPolicyCode.MatchString(mk) && len(blockedArgs) > 0 {
+					continue
+				}
+				addArg(mk)
 			}
 		}
 

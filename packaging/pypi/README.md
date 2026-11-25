@@ -9,8 +9,14 @@ Zero-dependency Go red-team scanner, passive MCP/A2A surface inspector, and stdi
 ```bash
 # Run immediately with uvx (no Go toolchain required)
 uvx sixi-scanner list
+uvx sixi-scanner list --pack safety
 uvx sixi-scanner surface --url https://your-agent.example --rug-pull
 uvx sixi-scanner scan --url https://your-agent.example/v1/chat/completions
+
+# Optional: domain-tailored polite attacks + 3-turn Crescendo backtracking (scored on tool_calls)
+uvx sixi-scanner scan --target chat --url https://your-agent.example/api/chat --stateful \
+  --trace-path tool_calls --context agent.json \
+  --attacker-url http://127.0.0.1:8089/v1 --attacker-model qwen3.8-27b --export-laya rules.json
 
 # Or install globally
 pip install sixi-scanner

@@ -20,6 +20,7 @@ func cmdList(args []string, stdout io.Writer) result {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "emit the technique catalogue as JSON")
 	detail := fs.String("detail", "", "print one technique in full, by ID")
+	pack := fs.String("pack", "agent", "probe pack to list: agent (50), safety (6), or all (56)")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage: sixi-scanner list [flags]
 
@@ -36,7 +37,10 @@ Flags:
 		return result{code: exitUsage, err: err}
 	}
 
-	reg := baseline.Registry()
+	reg, err := baseline.RegistryForPack(*pack)
+	if err != nil {
+		return result{code: exitUsage, err: err}
+	}
 
 	if *detail != "" {
 		t, ok := reg.Get(*detail)

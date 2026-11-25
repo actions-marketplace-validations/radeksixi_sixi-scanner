@@ -86,7 +86,9 @@ func TestRecitationOptOutsMatchTheMeasuredSet(t *testing.T) {
 	// probe's own replies on which the recitation test fires; keep it, so a reader can see how thin
 	// the evidence is without having to go looking for it.
 	probed := map[string]string{
-		"probe.llm02.parameter-induction": "1 of 8 replies in probe_param_induction.py, one run",
+		"probe.llm02.parameter-induction":        "1 of 8 replies in probe_param_induction.py, one run",
+		"probe.llm06.obfuscated-tool-invocation": "measured on live Qwen3.8-27B Atlas Enterprise v2: model decodes Base64/ROT13 and enumerates permitted boundaries while refusing",
+		"probe.llm01.rag-document-indirect":      "measured on live Qwen3.8-27B Atlas Enterprise v2: model quotes embedded SOP rules and lists permitted dispute steps while refusing",
 	}
 	got := map[string]bool{}
 	for _, tt := range baseline.Registry().All() {

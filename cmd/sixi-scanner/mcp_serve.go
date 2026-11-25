@@ -221,6 +221,7 @@ func callLocalMCPTool(ctx context.Context, name string, rawArgs json.RawMessage)
 	switch name {
 	case "sixi_list_techniques":
 		var a struct {
+			Pack        string `json:"pack"`
 			Tag         string `json:"tag"`
 			MinSeverity string `json:"min_severity"`
 		}
@@ -229,7 +230,7 @@ func callLocalMCPTool(ctx context.Context, name string, rawArgs json.RawMessage)
 				return "invalid arguments: " + err.Error(), true
 			}
 		}
-		reg, err := selectTechniques(nil, nil, splitCommaList(a.Tag))
+		reg, err := selectTechniques(a.Pack, nil, nil, splitCommaList(a.Tag))
 		if err != nil {
 			return err.Error(), true
 		}
@@ -305,6 +306,7 @@ func callLocalMCPTool(ctx context.Context, name string, rawArgs json.RawMessage)
 			Target         string            `json:"target"`
 			Model          string            `json:"model"`
 			Stateful       bool              `json:"stateful"`
+			Pack           string            `json:"pack"`
 			Only           []string          `json:"only"`
 			Tag            []string          `json:"tag"`
 			Attempts       int               `json:"attempts"`
@@ -343,7 +345,7 @@ func callLocalMCPTool(ctx context.Context, name string, rawArgs json.RawMessage)
 		if err != nil {
 			return err.Error(), true
 		}
-		reg, err := selectTechniques(a.Only, nil, a.Tag)
+		reg, err := selectTechniques(a.Pack, a.Only, nil, a.Tag)
 		if err != nil {
 			return err.Error(), true
 		}
